@@ -114,6 +114,9 @@ process_vtt() {
     local VTT_FILE="$1"
     local BASE_NAME="${VTT_FILE%.vtt}"
     local CACHED_VTT=$(cache_file "$VTT_FILE" ".vtt")
+    
+    # Tiling for large transcripts
+    MAX_WORDS_PER_TILE=500
 
     # Clean the VTT transcript
     local CLEANED_TRANSCRIPT="${CACHED_VTT%.vtt}_cleaned.txt"
@@ -134,7 +137,6 @@ process_vtt() {
     echo "Summarizing transcript..."
 
     # Tiling for large transcripts
-    MAX_WORDS_PER_TILE=500
     current_words=0
     segment_text=""
     segment_count=0

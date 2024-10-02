@@ -23,31 +23,53 @@ process_vtt() {
 
     # Process captions
     buffer=""
+    caption=""
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
-            timestamp=$(echo "$line" | cut -d' ' -f1 | sed 's/\(.*\)\..*/\1/')
-            text=$(echo "$line" | cut -d' ' -f2-)
-            clean_caption=$(clean_text "$text")
-            if [[ -n "$clean_caption" ]]; then
-                current_line="${timestamp} ${clean_caption}"
-                if [[ -z "$buffer" ]]; then
-                    buffer="$current_line"
-                else
-                    prev_text=$(echo "$buffer" | cut -d' ' -f2-)
-                    if is_prefix "$prev_text" "$clean_caption"; then
-                        buffer="$current_line"
-                    else
-                        echo "$buffer"
-                        buffer="$current_line"
-                    fi
-                fi
+            if [[ -n "$caption" ]]; then
+                process_caption "$caption"
+                caption=""
+            fi
+            caption="$line"
+        elif [[ -n "$line" ]]; then
+            caption+=$'\n'"$line"
+        else
+            if [[ -n "$caption" ]]; then
+                process_caption "$caption"
+                caption=""
             fi
         fi
-    done < <(echo "$content")
+    done
+
+    # Process the last caption
+    if [[ -n "$caption" ]]; then
+        process_caption "$caption"
+    fi
 
     # Print the last buffer content
     if [[ -n "$buffer" ]]; then
         echo "$buffer"
+    fi
+}
+
+process_caption() {
+    local caption="$1"
+    timestamp=$(echo "$caption" | head -n1 | cut -d' ' -f1 | sed 's/\(.*\)\..*/\1/')
+    text=$(echo "$caption" | tail -n +2)
+    clean_caption=$(clean_text "$text")
+    if [[ -n "$clean_caption" ]]; then
+        current_line="${timestamp} ${clean_caption}"
+        if [[ -z "$buffer" ]]; then
+            buffer="$current_line"
+        else
+            prev_text=$(echo "$buffer" | cut -d' ' -f2-)
+            if is_prefix "$prev_text" "$clean_caption"; then
+                buffer="$current_line"
+            else
+                echo "$buffer"
+                buffer="$current_line"
+            fi
+        fi
     fi
 }
 

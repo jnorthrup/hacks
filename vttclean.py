@@ -10,7 +10,7 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
     # Remove leading/trailing whitespace
     text = text.strip()
-    # Remove any remaining non-printable characters
+    # Remove non-printable characters (except spaces)
     text = ''.join(char for char in text if char.isprintable() or char.isspace())
     return text
 
@@ -36,9 +36,9 @@ def process_vtt(content):
         lines = caption.split('\n')
         if len(lines) >= 2:
             # Extract only the start time and remove milliseconds
-            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})', lines[0])
+            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})\.?\d*', lines[0])
             if timestamp_match:
-                timestamp = timestamp_match.group(1)
+                timestamp = timestamp_match.group(1)  # This will remove milliseconds if present
                 text = ' '.join(lines[1:])
                 clean_caption = clean_text(text)
                 if clean_caption:

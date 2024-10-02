@@ -1,5 +1,12 @@
 #!/bin/bash
 
+set -e
+
+# Function to log messages to stderr
+log() {
+    echo "$@" >&2
+}
+
 clean_text() {
     local text="$1"
     # Remove HTML tags
@@ -18,8 +25,13 @@ is_prefix() {
 }
 
 process_vtt() {
+    local input_file="$1"
+    local output_file="$2"
+
+    log "Processing file: $input_file"
+
     # Remove WEBVTT header and metadata
-    content=$(sed '1,/^$/d' "$1")
+    content=$(sed '1,/^$/d' "$input_file")
 
     # Process captions
     buffer=""
@@ -27,7 +39,7 @@ process_vtt() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
             if [[ -n "$caption" ]]; then
-                process_caption "$caption"
+                process_caption "$caption" >> "$output_file"
                 caption=""
             fi
             caption="$line"
@@ -35,21 +47,23 @@ process_vtt() {
             caption+=$'\n'"$line"
         else
             if [[ -n "$caption" ]]; then
-                process_caption "$caption"
+                process_caption "$caption" >> "$output_file"
                 caption=""
             fi
         fi
-    done
+    done <<< "$content"
 
     # Process the last caption
     if [[ -n "$caption" ]]; then
-        process_caption "$caption"
+        process_caption "$caption" >> "$output_file"
     fi
 
     # Print the last buffer content
     if [[ -n "$buffer" ]]; then
-        echo "$buffer"
+        echo "$buffer" >> "$output_file"
     fi
+
+    log "Processed content written to: $output_file"
 }
 
 process_caption() {
@@ -73,10 +87,25 @@ process_caption() {
     fi
 }
 
-if [[ $# -gt 0 ]]; then
-    # File input
-    process_vtt "$1"
-else
-    # Stdin input
-    process_vtt /dev/stdin
-fi
+main() {
+    if [[ $# -gt 0 ]]; then
+        # File input
+        input_file="$1"
+        output_file="${input_file%.*}_cleaned.txt"
+        process_vtt "$input_file" "$output_file"
+    else
+        # Stdin input
+        log "Reading from stdin..."
+        temp_input=$(mktemp)
+        cat > "$temp_input"
+        output_file="cleaned_output.txt"
+        process_vtt "$temp_input" "$output_file"
+        rm "$temp_input"
+    fi
+}
+
+# Trap for handling errors and cleaning up
+trap 'log "Error occurred. Exiting..."; exit 1' ERR
+
+# Run the main function
+main "$@"

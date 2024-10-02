@@ -47,6 +47,12 @@ cache_file() {
     echo "$CACHE_FILE"
 }
 
+# Function to sanitize a string for use as a filename
+sanitize_filename() {
+    local STRING="$1"
+    echo "$STRING" | iconv -c -t ascii//translit | sed 's/[^A-Za-z0-9._-]/_/g' | tr '[:upper:]' '[:lower:]'
+}
+
 # Function to clean text from a VTT file
 clean_text() {
     sed 's/<[^>]*>//g' | tr -s ' ' | sed 's/^[ \t]*//;s/[ \t]*$//'
@@ -115,8 +121,9 @@ process_vtt() {
     local URL=$2 
     local URL_HASH=$(echo "$URL" | md5sum | cut -d' ' -f1)
     local TEMP_DIR=$(mktemp -d)
-    local BASE_NAME="${TEMP_DIR}/${URL_HASH}"
+    local BASE_NAME="${TEMP_DIR}/temp" # Temporary base name
     local CLEANED_TRANSCRIPT="${BASE_NAME}_cleaned.txt"
+    local FINAL_BASE_NAME="" # Final base name for output files
     local SUMMARY_FILE="${BASE_NAME}_summary.txt"
     
     # Tiling for large transcripts
@@ -194,13 +201,18 @@ process_vtt() {
     done
     cp "$SUMMARY_FILE" "${BASE_NAME}_summary_v${VERSION}.txt"
 
-    # Copy transcript without versioning
-    cp "$CLEANED_TRANSCRIPT" "${BASE_NAME}.txt"
-
     echo "Processing complete!"
+
+    # Determine the final base name for output files
+    FINAL_BASE_NAME=$(basename "$VTT_FILE" .vtt)
+    FINAL_BASE_NAME=$(sanitize_filename "$FINAL_BASE_NAME")
+    # Move files to the final destination with the sanitized name
+    cp "${BASE_NAME}_cleaned.txt" "${OUTPUT_DIR}/${FINAL_BASE_NAME}.txt"
+    cp "${BASE_NAME}_summary_v${VERSION}.txt" "${OUTPUT_DIR}/${FINAL_BASE_NAME}_summary.txt"
+
     echo "Files available:"
-    echo " - Transcript: ${BASE_NAME}.txt"
-    echo " - Summary: ${BASE_NAME}_summary_v${VERSION}.txt"
+    echo " - Transcript: ${OUTPUT_DIR}/${FINAL_BASE_NAME}.txt"
+    echo " - Summary: ${OUTPUT_DIR}/${FINAL_BASE_NAME}_summary.txt"
     cat "$SUMMARY_FILE"
 
     # Clean up the temporary directory
@@ -214,11 +226,15 @@ if [[ "$1" == *.vtt ]]; then
 elif [[ "$1" == *"http"* ]]; then
     echo "Processing as YouTube URL..."
 
+    # Extract the video title
+    VIDEO_TITLE=$(yt-dlp --get-title "$1")
+    FINAL_BASE_NAME=$(sanitize_filename "$VIDEO_TITLE")
+
     # Attempt to download subtitles first
     yt-dlp --skip-download --write-auto-sub --sub-lang en \
-           --cookies-from-browser brave --output "$OUTPUT_DIR/%(title)s.%(ext)s" "$1"
+           --cookies-from-browser brave --output "$OUTPUT_DIR/${FINAL_BASE_NAME}.%(ext)s" "$1"
 
-    VTT_FILE=$(find "$OUTPUT_DIR" -name "*.vtt" | head -n 1)
+    VTT_FILE=$(find "$OUTPUT_DIR" -name "${FINAL_BASE_NAME}.*.vtt" | head -n 1)
 
     if [ -n "$VTT_FILE" ]; then
         echo "Subtitles found, processing VTT file..."
@@ -226,9 +242,9 @@ elif [[ "$1" == *"http"* ]]; then
     else
         echo "No subtitles found, downloading audio and generating transcript..."
         yt-dlp -x --audio-format wav --postprocessor-args "-ar 16k" \
-               --cookies-from-browser brave --output "$OUTPUT_DIR/%(title)s.%(ext)s" "$1"
+               --cookies-from-browser brave --output "$OUTPUT_DIR/${FINAL_BASE_NAME}.%(ext)s" "$1"
 
-        WAV_FILE=$(find "$OUTPUT_DIR" -name "*.wav" | head -n 1)
+        WAV_FILE=$(find "$OUTPUT_DIR" -name "${FINAL_BASE_NAME}.wav" | head -n 1)
 
         if [ -z "$WAV_FILE" ]; then
             echo "Error: Failed to download audio."

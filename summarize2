@@ -8,6 +8,11 @@ WHISPCC="$HOME/.local/bin/whisper.cpp"
 OLLAMA_MODEL="mistral:latest"
 OLLAMA_MODEL="llama3.1:latest"
 
+# Prompts for different segments
+FIRST_PROMPT="Summarize this initial part of a transcript like a news headline, followed by bullet points of key information. Include timestamps for each point in the format '00:00:00 sentence'. Be accurate, concise, and use straightforward language."
+MIDDLE_PROMPT="Concisely summarize the key points discussed in this section of the transcript, using bullet points. Include timestamps for each point in the format '00:00:00 sentence'. Maintain a neutral tone and focus on factual information."
+LAST_PROMPT="Provide a concise summary of this final part of the transcript, highlighting the main takeaways and any concluding remarks. Use bullet points and include timestamps in the format '00:00:00 sentence'."
+
 # Global variable to track job queue
 JOB_QUEUE=()
 
@@ -61,14 +66,14 @@ clean_text() {
 # Function to summarize a segment of text
 summarize_segment() {
     local SEGMENT_TEXT="$1"
+    local PROMPT="$2"
     local SUMMARY_OUTPUT=""
 
     if $USE_FABRIC; then
         SUMMARY_OUTPUT=$(fabric -p summarize <<< "$SEGMENT_TEXT" 2>&1)
     else
         # Use ollama for summarization
-        prom=(This transcript needs to be given a topic sentence, followed by the salient points made by the conversation and followed up by a conclusion. You will use markdown layouts without a lot of special chars. Nuggets need a timestamp in the format '00:00:00 sentence' to link to the source media in our comment parser. Be fully candid with language shared. You are a workaholic addicted to perfect kmeans-like division of large captions equally spacing the contents being summarized or noting which parts to skip to. Your summary below: )
-        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT" 2>&1)
+        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "$PROMPT" <<< "$SEGMENT_TEXT" 2>&1)
     fi
 
     if [ $? -ne 0 ]; then
@@ -163,7 +168,15 @@ process_vtt() {
                 # Process the current segment
                 segment_count=$((segment_count + 1))
                 echo "Processing segment $segment_count (${current_time} - ${seconds})..." >&2
-                summary=$(summarize_segment "$segment_text")
+                
+                # Choose the appropriate prompt
+                if [ $segment_count -eq 1 ]; then
+                    prompt="$FIRST_PROMPT"
+                else
+                    prompt="$MIDDLE_PROMPT"
+                fi
+                
+                summary=$(summarize_segment "$segment_text" "$prompt")
                 if [ $? -ne 0 ]; then
                     echo "Error: Failed to summarize segment $segment_count." >&2
                     echo "Problematic segment text:" >&2
@@ -184,7 +197,7 @@ process_vtt() {
     if [ -n "$segment_text" ]; then
         segment_count=$((segment_count + 1))
         echo "Processing final segment $segment_count..." >&2
-        summary=$(summarize_segment "$segment_text")
+        summary=$(summarize_segment "$segment_text" "$LAST_PROMPT")
         if [ $? -ne 0 ]; then
             echo "Error: Failed to summarize final segment $segment_count." >&2
             exit 1

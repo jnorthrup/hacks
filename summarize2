@@ -9,9 +9,9 @@ OLLAMA_MODEL="mistral:latest"
 OLLAMA_MODEL="llama3.1:latest"
 
 # Prompts for different segments
-FIRST_PROMPT="Summarize this initial part of a transcript like a news headline, followed by bullet points of key information. Include timestamps for each point in the format '00:00:00 sentence'. Be accurate, concise, and use straightforward language."
-MIDDLE_PROMPT="Concisely summarize the key points discussed in this section of the transcript, using bullet points. Include timestamps for each point in the format '00:00:00 sentence'. Maintain a neutral tone and focus on factual information."
-LAST_PROMPT="Provide a concise summary of this final part of the transcript, highlighting the main takeaways and any concluding remarks. Use bullet points and include timestamps in the format '00:00:00 sentence'."
+FIRST_PROMPT="Summarize this beginning part of a transcript in one sentence, then provide bullet points with timestamps (00:00:00 sentence)."
+MIDDLE_PROMPT="Summarize the key points of this part of the transcript in bullet points with timestamps (00:00:00 sentence)."
+LAST_PROMPT="Summarize the main takeaways of this final part of the transcript in bullet points with timestamps (00:00:00 sentence)."
 
 # Global variable to track job queue
 JOB_QUEUE=()
@@ -110,13 +110,16 @@ process_job_queue() {
         # Example job execution with progress updates
         echo "Processing job $((i+1))/$JOB_COUNT: ${JOB_QUEUE[$i]}"
         update_job_progress "$i" 10 1 "Starting job..."
-        # ... (Job execution logic)
         update_job_progress "$i" 10 5 "Processing..."
-        # ... (More job execution logic)
         update_job_progress "$i" 10 10 "Finishing job..."
-        # Execute the job 
-        eval "${JOB_QUEUE[$i]}"
-        # process_vtt "${JOB_QUEUE[$i]}"
+        
+        # Temporarily comment out the actual job execution
+        # eval "${JOB_QUEUE[$i]}"
+        
+        # Instead, test the summarize_segment function with a short test string
+        echo "Testing summarize_segment function..."
+        local TEST_TEXT="This is a test transcript. 00:00:05 The first key point is mentioned. 00:00:15 Another important point is discussed."
+        summarize_segment "$TEST_TEXT" "$MIDDLE_PROMPT"
     done
 }
 

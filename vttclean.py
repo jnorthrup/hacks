@@ -2,6 +2,7 @@
  
 import re
 import sys
+import os
 
 def clean_text(text):
     # Remove HTML tags
@@ -62,14 +63,29 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) > 1:
             # File input
-            with open(sys.argv[1], 'r', encoding='utf-8') as file:
+            input_file = sys.argv[1]
+            print(f"Processing file: {input_file}", file=sys.stderr)
+            with open(input_file, 'r', encoding='utf-8') as file:
                 content = file.read()
         else:
             # Stdin input
+            print("Reading from stdin...", file=sys.stderr)
             content = sys.stdin.read()
 
         result = process_vtt(content)
-        print(result)
+        
+        # Write to a file instead of printing to stdout
+        output_file = os.path.splitext(input_file)[0] + "_cleaned.txt"
+        with open(output_file, 'w', encoding='utf-8') as out_file:
+            out_file.write(result)
+        
+        print(f"Processed content written to: {output_file}", file=sys.stderr)
+    except BrokenPipeError:
+        # Python flushes standard streams on exit; redirect remaining output
+        # to devnull to avoid another BrokenPipeError at shutdown
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(1)  # Python exits with error code 1 on EPIPE
     except Exception as e:
         print(f"Error processing input: {e}", file=sys.stderr)
         sys.exit(1)

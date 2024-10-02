@@ -31,7 +31,7 @@ shift $((OPTIND-1))
 
 # Function to get MD5 hash of a file
 get_md5() {
-    md5sum "$1" | awk '{ print $1 }'
+    md5sum "$1" | cut -d' ' -f1
 }
 
 # Function to cache a file using hardlinks (atomic)

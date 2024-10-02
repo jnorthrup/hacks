@@ -104,7 +104,8 @@ process_job_queue() {
         # ... (More job execution logic)
         update_job_progress "$i" 10 10 "Finishing job..."
         # Execute the job 
-        eval "${JOB_QUEUE[$i]}"
+        # eval "${JOB_QUEUE[$i]}"
+        process_vtt "${JOB_QUEUE[$i]}"
     done
 }
 
@@ -196,12 +197,12 @@ process_vtt() {
 }
 
 # Add any processing tasks to the job queue
-add_job "process_vtt \"$1\""
+add_job "$1"
 
 # Main script logic
 if [[ "$1" == *.vtt ]]; then
     echo "Processing as VTT file..."
-    process_vtt "$1"
+    # process_vtt "$1"
 elif [[ "$1" == *"http"* ]]; then
     echo "Processing as YouTube URL..."
 
@@ -213,7 +214,7 @@ elif [[ "$1" == *"http"* ]]; then
 
     if [ -n "$VTT_FILE" ]; then
         echo "Subtitles found, processing VTT file..."
-        process_vtt "$VTT_FILE"
+        # process_vtt "$VTT_FILE"
     else
         echo "No subtitles found, downloading audio and generating transcript..."
         yt-dlp -x --audio-format wav --postprocessor-args "-ar 16k" \
@@ -230,7 +231,7 @@ elif [[ "$1" == *"http"* ]]; then
         "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
         VTT_FILE="${WAV_FILE%.wav}.vtt"
 
-        process_vtt "$VTT_FILE"
+        # process_vtt "$VTT_FILE"
 
         # Convert WAV to OGG Opus
         echo "Converting WAV to OGG Opus..."
@@ -246,10 +247,9 @@ elif [ -f "$1" ]; then
     "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
     VTT_FILE="${WAV_FILE%.wav}.vtt"
 
-    process_vtt "$VTT_FILE"
+    # process_vtt "$VTT_FILE"
 else
     echo "Error: Invalid input. Provide a valid URL, VTT file, or a local audio file."
     exit 1
 fi
-
 process_job_queue

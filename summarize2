@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Configuration (adjust these paths)
 MODEL_PATH="$HOME/.cache/whisper.cpp/ggml-small.en-tdrz.bin"
@@ -104,8 +104,8 @@ process_job_queue() {
         # ... (More job execution logic)
         update_job_progress "$i" 10 10 "Finishing job..."
         # Execute the job 
-        # eval "${JOB_QUEUE[$i]}"
-        process_vtt "${JOB_QUEUE[$i]}"
+        eval "${JOB_QUEUE[$i]}"
+        # process_vtt "${JOB_QUEUE[$i]}"
     done
 }
 
@@ -199,7 +199,7 @@ process_vtt() {
 }
 
 # Add any processing tasks to the job queue
-add_job "$1"
+add_job "process_vtt \"$1\""
 
 # Main script logic
 if [[ "$1" == *.vtt ]]; then

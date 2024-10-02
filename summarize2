@@ -108,6 +108,11 @@ process_vtt() {
     local CLEANED_TRANSCRIPT="${CACHED_VTT%.vtt}_cleaned.txt"
     sed 's/<[^>]*>//g' "$CACHED_VTT" | awk '!/^WEBVTT/ && NF > 0' | sed 's/^[ \t]*//;s/[ \t]*$//' > "$CLEANED_TRANSCRIPT"
 
+    # Calculate and print the workplan (number of segments)
+    TOTAL_WORDS=$(wc -w "$CLEANED_TRANSCRIPT" | awk '{print $1}')
+    NUM_SEGMENTS=$(( (TOTAL_WORDS + MAX_WORDS_PER_TILE - 1) / MAX_WORDS_PER_TILE ))
+    echo "Workplan: Summarizing $TOTAL_WORDS words in $NUM_SEGMENTS segments..." >&2
+
     # Generate summary (always fresh)
     SUMMARY_FILE="${BASE_NAME}_summary.txt"
     echo "Summarizing transcript..."

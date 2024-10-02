@@ -112,16 +112,22 @@ process_job_queue() {
 # Function to process a VTT file (generate summary and handle versioning)
 process_vtt() {
     local VTT_FILE=$1
-    local URL=$2
-    local BASE_NAME="${VTT_FILE%.vtt}"
-    local CACHED_VTT=$(cache_file "$URL" ".vtt")
+    local URL=$2 
+    local URL_HASH=$(echo "$URL" | md5sum | cut -d' ' -f1)
+    local TEMP_DIR=$(mktemp -d)
+    local BASE_NAME="${TEMP_DIR}/${URL_HASH}"
+    local CLEANED_TRANSCRIPT="${BASE_NAME}_cleaned.txt"
+    local SUMMARY_FILE="${BASE_NAME}_summary.txt"
     
     # Tiling for large transcripts
     TILE_DURATION_SECONDS=720.0 # 12 minutes
     OVERLAP_DURATION_SECONDS=120.0 # 2 minutes
 
+    # Copy the VTT file to the temporary directory
+    cp "$VTT_FILE" "${BASE_NAME}.vtt"
+    local CACHED_VTT=$(cache_file "${BASE_NAME}.vtt" ".vtt")
+
     # Clean the VTT transcript
-    local CLEANED_TRANSCRIPT="${CACHED_VTT%.vtt}_cleaned.txt"
     python3 vttclean.py "$CACHED_VTT" > "$CLEANED_TRANSCRIPT" 2>"${CLEANED_TRANSCRIPT}.error"
     if [ $? -ne 0 ]; then
         echo "Error: Failed to clean the VTT file. Error log:" >&2
@@ -130,7 +136,6 @@ process_vtt() {
     fi
 
     # Generate summary (always fresh)
-    SUMMARY_FILE="${BASE_NAME}_summary.txt"
     echo "Summarizing transcript..."
 
     # Tiling for large transcripts
@@ -197,6 +202,9 @@ process_vtt() {
     echo " - Transcript: ${BASE_NAME}.txt"
     echo " - Summary: ${BASE_NAME}_summary_v${VERSION}.txt"
     cat "$SUMMARY_FILE"
+
+    # Clean up the temporary directory
+    rm -rf "$TEMP_DIR"
 }
 
 # Main script logic

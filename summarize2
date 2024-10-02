@@ -55,14 +55,22 @@ clean_text() {
 # Function to summarize a segment of text
 summarize_segment() {
     local SEGMENT_TEXT="$1"
+    local SUMMARY_OUTPUT=""
 
     if $USE_FABRIC; then
-        fabric -p summarize <<< "$SEGMENT_TEXT" || return 1
+        SUMMARY_OUTPUT=$(fabric -p summarize <<< "$SEGMENT_TEXT" 2>&1)
     else
         # Use ollama for summarization
         prom=(This transcript needs to be given a topic sentence, followed by the salient points made by the conversation and followed up by a conclusion. You will use markdown layouts without a lot of special chars. Nuggets need a timestamp in the format '00:00:00 sentence' to link to the source media in our comment parser. Be fully candid with language shared. You are a workaholic addicted to perfect kmeans-like division of large captions equally spacing the contents being summarized or noting which parts to skip to. Your summary below: )
-        ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT" || return 1
+        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT" 2>&1)
     fi
+
+    if [ $? -ne 0 ]; then
+        echo "Error in summarization: $SUMMARY_OUTPUT" >&2
+        return 1
+    fi
+
+    echo "$SUMMARY_OUTPUT"
 }
 
 # Function to add a job to the queue
@@ -108,9 +116,10 @@ process_vtt() {
 
     # Clean the VTT transcript
     local CLEANED_TRANSCRIPT="${CACHED_VTT%.vtt}_cleaned.txt"
-    python3 vttclean.py "$CACHED_VTT" > "$CLEANED_TRANSCRIPT"
+    python3 vttclean.py "$CACHED_VTT" > "$CLEANED_TRANSCRIPT" 2>"${CLEANED_TRANSCRIPT}.error"
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to clean the VTT file." >&2
+        echo "Error: Failed to clean the VTT file. Error log:" >&2
+        cat "${CLEANED_TRANSCRIPT}.error" >&2
         exit 1
     fi
 
@@ -143,6 +152,8 @@ process_vtt() {
             summary=$(summarize_segment "$segment_text")
             if [ $? -ne 0 ]; then
                 echo "Error: Failed to summarize segment $segment_count." >&2
+                echo "Problematic segment text:" >&2
+                echo "$segment_text" >&2
                 exit 1
             fi
             echo "$summary" >> "$SUMMARY_FILE"

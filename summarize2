@@ -111,9 +111,10 @@ process_job_queue() {
 
 # Function to process a VTT file (generate summary and handle versioning)
 process_vtt() {
-    local VTT_FILE="$1"
+    local VTT_FILE=$1
+    local URL=$2
     local BASE_NAME="${VTT_FILE%.vtt}"
-    local CACHED_VTT=$(cache_file "$1" ".vtt")
+    local CACHED_VTT=$(cache_file "$URL" ".vtt")
     
     # Tiling for large transcripts
     TILE_DURATION_SECONDS=720.0 # 12 minutes
@@ -233,7 +234,7 @@ elif [[ "$1" == *"http"* ]]; then
         "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
         VTT_FILE="${WAV_FILE%.wav}.vtt"
 
-        add_job "process_vtt \"$VTT_FILE\""
+        add_job "process_vtt \"$VTT_FILE\" \"$1\""
 
         # Convert WAV to OGG Opus
         echo "Converting WAV to OGG Opus..."
@@ -249,7 +250,7 @@ elif [ -f "$1" ]; then
     "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
     VTT_FILE="${WAV_FILE%.wav}.vtt"
 
-    add_job "process_vtt \"$VTT_FILE\""
+    add_job "process_vtt \"$VTT_FILE\" \"$1\""
 else
     echo "Error: Invalid input. Provide a valid URL, VTT file, or a local audio file."
     exit 1

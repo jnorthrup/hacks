@@ -113,7 +113,7 @@ process_job_queue() {
 process_vtt() {
     local VTT_FILE="$1"
     local BASE_NAME="${VTT_FILE%.vtt}"
-    local CACHED_VTT=$(cache_file "$VTT_FILE" ".vtt")
+    local CACHED_VTT=$(cache_file "$1" ".vtt")
     
     # Tiling for large transcripts
     TILE_DURATION_SECONDS=720.0 # 12 minutes

@@ -1,6 +1,8 @@
 #!/usr/bin/python3
  
 import re
+import datetime
+import glob
 import sys
 
 def clean_text(text):
@@ -57,13 +59,14 @@ def process_vtt(content):
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) > 1:
-            # File input
-            with open(sys.argv[1], 'r', encoding='utf-8') as file:
+        if len(sys.argv) < 2:
+            print("Usage: python vttclean.py <file_pattern>", file=sys.stderr)
+            sys.exit(1)
+
+        file_pattern = sys.argv[1]
+        for filename in glob.glob(file_pattern):
+            with open(filename, 'r', encoding='utf-8') as file:
                 content = file.read()
-        else:
-            # Stdin input
-            content = sys.stdin.read()
 
         result = process_vtt(content)
         print(result)

@@ -199,13 +199,10 @@ process_vtt() {
     cat "$SUMMARY_FILE"
 }
 
-# Add any processing tasks to the job queue
-add_job "process_vtt \"$VTT_FILE\""
-
 # Main script logic
 if [[ "$1" == *.vtt ]]; then
     echo "Processing as VTT file..."
-    # process_vtt "$1"
+    add_job "process_vtt \"$1\" \"$1\""
 elif [[ "$1" == *"http"* ]]; then
     echo "Processing as YouTube URL..."
 
@@ -217,7 +214,7 @@ elif [[ "$1" == *"http"* ]]; then
 
     if [ -n "$VTT_FILE" ]; then
         echo "Subtitles found, processing VTT file..."
-        add_job "process_vtt \"$VTT_FILE\""
+        add_job "process_vtt \"$VTT_FILE\" \"$1\""
     else
         echo "No subtitles found, downloading audio and generating transcript..."
         yt-dlp -x --audio-format wav --postprocessor-args "-ar 16k" \

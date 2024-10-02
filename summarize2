@@ -70,13 +70,30 @@ add_job() {
     JOB_QUEUE+=("$@")
 }
 
+# Function to update the progress bar for a job
+update_job_progress() {
+    local JOB_INDEX="$1"
+    local TOTAL_STEPS="$2"
+    local CURRENT_STEP="$3"
+    local JOB_MESSAGE="$4"
+
+    # ... (Implementation for updating the TUI progress bar)
+    # You can use a library like 'whiptail' or 'dialog' for TUI elements
+    # Example using echo for now:
+    echo "Job $((JOB_INDEX+1))/$JOB_COUNT: $JOB_MESSAGE ($CURRENT_STEP/$TOTAL_STEPS)"
+}
+
 # Function to process the job queue
 process_job_queue() {
     local JOB_COUNT=${#JOB_QUEUE[@]}
     echo "Processing job queue ($JOB_COUNT jobs)..."
     for (( i=0; i<JOB_COUNT; i++ )); do
-        echo "Processing job $((i+1))/$JOB_COUNT: ${JOB_QUEUE[$i]}"
-        # Execute the job (replace with actual job execution logic)
+        # Example job execution with progress updates
+        update_job_progress "$i" 10 1 "Starting job..."
+        # ... (Job execution logic)
+        update_job_progress "$i" 10 5 "Processing..."
+        # ... (More job execution logic)
+        update_job_progress "$i" 10 10 "Finishing job..."
         eval "${JOB_QUEUE[$i]}"
     done
 }

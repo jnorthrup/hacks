@@ -199,7 +199,7 @@ process_vtt() {
 }
 
 # Add any processing tasks to the job queue
-add_job "process_vtt \"$1\""
+add_job "process_vtt \"$VTT_FILE\""
 
 # Main script logic
 if [[ "$1" == *.vtt ]]; then

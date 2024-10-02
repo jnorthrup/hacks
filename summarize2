@@ -1,0 +1,151 @@
+#!/bin/bash
+
+# Configuration (adjust these paths)
+MODEL_PATH="$HOME/.local/share/models/ggml-small.en-tdrz.bin"
+OUTPUT_DIR="$HOME/processed_audio"
+CACHE_DIR="/tmp/summarize_cache"
+VTT_CLEANER_SCRIPT="$HOME/bin/vttclean.py"
+WHISPCC="$HOME/work/whisper.cpp/main"
+OLLAMA_MODEL="mistral:latest"
+OLLAMA_MODEL="llama3.1:latest"
+
+# Ensure output and cache directories exist
+mkdir -p "$OUTPUT_DIR" "$CACHE_DIR"
+
+# Parse command line options
+USE_FABRIC=false
+while getopts "f" opt; do
+  case $opt in
+    f)
+      USE_FABRIC=true
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+
+# Function to get MD5 hash of a file
+get_md5() {
+    md5sum "$1" | awk '{ print $1 }'
+}
+
+# Function to cache a file using hardlinks (atomic)
+cache_file() {
+    local INPUT_FILE="$1"
+    local EXTENSION="$2"
+    local MD5=$(get_md5 "$INPUT_FILE")
+    local CACHE_SUBDIR="$CACHE_DIR/${MD5:0:2}/${MD5:2:2}"
+    local CACHE_FILE="$CACHE_SUBDIR/$MD5$EXTENSION"
+
+    mkdir -p "$CACHE_SUBDIR"
+    ln -f "$INPUT_FILE" "$CACHE_FILE"
+    echo "$CACHE_FILE"
+}
+
+# Function to process a VTT file (generate summary and handle versioning)
+process_vtt() {
+    local VTT_FILE="$1"
+    local BASE_NAME="${VTT_FILE%.vtt}"
+    local CACHED_VTT=$(cache_file "$VTT_FILE" ".vtt")
+
+    # Clean the VTT transcript
+    TXT_FILE="${CACHED_VTT%.vtt}.txt"
+    python3 "$VTT_CLEANER_SCRIPT" "$CACHED_VTT" > "$TXT_FILE"
+
+    # Generate summary (always fresh)
+    SUMMARY_FILE="${BASE_NAME}_summary.txt"
+    echo "Summarizing transcript..."
+    if $USE_FABRIC; then
+        fabric -p summarize -o "$SUMMARY_FILE" < "$TXT_FILE"
+    else
+        prom=(This transcript needs to be given a
+          topic sentence, followed by the salient
+          points made by the conversation and
+          followed up by a conclusion.
+          you will use markdown layouts without a lot of special chars.
+          nuggets need a timestamp in the format '00:00:00 sentence'
+          to link to the source media in our comment parser.
+          be fully candid with language shared.  You are a
+          workaholic addicted to perfect kmeans-like division of large captions
+          equally spacing the contents being summarized or noting
+          which parts to skip to. your summary below: )
+
+        ollama run "$OLLAMA_MODEL" "${prom[*]}" < "$TXT_FILE" > "$SUMMARY_FILE"
+
+
+    fi
+
+    # Versioned summary output
+    local VERSION=1
+    while [ -f "${BASE_NAME}_summary_v${VERSION}.txt" ]; do
+        VERSION=$((VERSION+1))
+    done
+    cp "$SUMMARY_FILE" "${BASE_NAME}_summary_v${VERSION}.txt"
+
+    # Copy transcript without versioning
+    cp "$TXT_FILE" "${BASE_NAME}.txt"
+
+    echo "Processing complete!"
+    echo "Files available:"
+    echo " - Transcript: ${BASE_NAME}.txt"
+    echo " - Summary: ${BASE_NAME}_summary_v${VERSION}.txt"
+    cat "$SUMMARY_FILE"
+
+}
+
+# Main script logic
+if [[ "$1" == *.vtt ]]; then
+    echo "Processing as VTT file..."
+    process_vtt "$1"
+elif [[ "$1" == *"http"* ]]; then
+    echo "Processing as YouTube URL..."
+
+    # Attempt to download subtitles first
+    yt-dlp --skip-download --write-auto-sub --sub-lang en \
+           --cookies-from-browser brave --output "$OUTPUT_DIR/%(title)s.%(ext)s" "$1"
+
+    VTT_FILE=$(find "$OUTPUT_DIR" -name "*.vtt" | head -n 1)
+
+    if [ -n "$VTT_FILE" ]; then
+        echo "Subtitles found, processing VTT file..."
+        process_vtt "$VTT_FILE"
+    else
+        echo "No subtitles found, downloading audio and generating transcript..."
+        yt-dlp -x --audio-format wav --postprocessor-args "-ar 16k" \
+               --cookies-from-browser brave --output "$OUTPUT_DIR/%(title)s.%(ext)s" "$1"
+
+        WAV_FILE=$(find "$OUTPUT_DIR" -name "*.wav" | head -n 1)
+
+        if [ -z "$WAV_FILE" ]; then
+            echo "Error: Failed to download audio."
+            exit 1
+        fi
+
+        echo "Running Whisper-CPP to generate VTT transcript..."
+        "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
+        VTT_FILE="${WAV_FILE%.wav}.vtt"
+
+        process_vtt "$VTT_FILE"
+
+        # Convert WAV to OGG Opus
+        echo "Converting WAV to OGG Opus..."
+        OGG_FILE="${WAV_FILE%.wav}.ogg"
+        ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 56k -ar 16k "$OGG_FILE"
+        echo " - Audio: $OGG_FILE"
+    fi
+elif [ -f "$1" ]; then
+    echo "Processing as local audio file..."
+    WAV_FILE="$1"
+
+    echo "Running Whisper-CPP to generate VTT transcript..."
+    "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
+    VTT_FILE="${WAV_FILE%.wav}.vtt"
+
+    process_vtt "$VTT_FILE"
+else
+    echo "Error: Invalid input. Provide a valid URL, VTT file, or a local audio file."
+    exit 1
+fi

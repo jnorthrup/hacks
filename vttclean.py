@@ -35,9 +35,9 @@ def process_vtt(content):
         lines = caption.split('\n')
         if len(lines) >= 2:
             # Extract only the start time and remove milliseconds
-            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})', lines[0])
+            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})\.(\d{3})', lines[0])
             if timestamp_match:
-                timestamp = timestamp_match.group(1)
+                timestamp = f"{timestamp_match.group(1)}.{timestamp_match.group(2)}"
                 text = ' '.join(lines[1:])
                 clean_caption = clean_text(text)
                 if clean_caption:

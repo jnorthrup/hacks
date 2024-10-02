@@ -89,11 +89,13 @@ process_job_queue() {
     echo "Processing job queue ($JOB_COUNT jobs)..."
     for (( i=0; i<JOB_COUNT; i++ )); do
         # Example job execution with progress updates
+        echo "Processing job $((i+1))/$JOB_COUNT: ${JOB_QUEUE[$i]}"
         update_job_progress "$i" 10 1 "Starting job..."
         # ... (Job execution logic)
         update_job_progress "$i" 10 5 "Processing..."
         # ... (More job execution logic)
         update_job_progress "$i" 10 10 "Finishing job..."
+        # Execute the job 
         eval "${JOB_QUEUE[$i]}"
     done
 }

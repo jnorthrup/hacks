@@ -2,7 +2,6 @@
  
 import re
 import sys
-import os
 
 def clean_text(text):
     # Remove HTML tags
@@ -10,10 +9,7 @@ def clean_text(text):
     # Remove multiple spaces
     text = re.sub(r'\s+', ' ', text)
     # Remove leading/trailing whitespace
-    text = text.strip()
-    # Remove non-printable characters (except spaces)
-    text = ''.join(char for char in text if char.isprintable() or char.isspace())
-    return text
+    return text.strip()
 
 def is_prefix(a, b):
     return b.startswith(a)
@@ -37,9 +33,9 @@ def process_vtt(content):
         lines = caption.split('\n')
         if len(lines) >= 2:
             # Extract only the start time and remove milliseconds
-            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})\.?\d*', lines[0])
+            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})', lines[0])
             if timestamp_match:
-                timestamp = timestamp_match.group(1)  # This will remove milliseconds if present
+                timestamp = timestamp_match.group(1)
                 text = ' '.join(lines[1:])
                 clean_caption = clean_text(text)
                 if clean_caption:
@@ -63,29 +59,14 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) > 1:
             # File input
-            input_file = sys.argv[1]
-            print(f"Processing file: {input_file}", file=sys.stderr)
-            with open(input_file, 'r', encoding='utf-8') as file:
+            with open(sys.argv[1], 'r', encoding='utf-8') as file:
                 content = file.read()
         else:
             # Stdin input
-            print("Reading from stdin...", file=sys.stderr)
             content = sys.stdin.read()
 
         result = process_vtt(content)
-        
-        # Write to a file instead of printing to stdout
-        output_file = os.path.splitext(input_file)[0] + "_cleaned.txt"
-        with open(output_file, 'w', encoding='utf-8') as out_file:
-            out_file.write(result)
-        
-        print(f"Processed content written to: {output_file}", file=sys.stderr)
-    except BrokenPipeError:
-        # Python flushes standard streams on exit; redirect remaining output
-        # to devnull to avoid another BrokenPipeError at shutdown
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        sys.exit(1)  # Python exits with error code 1 on EPIPE
+        print(result)
     except Exception as e:
         print(f"Error processing input: {e}", file=sys.stderr)
         sys.exit(1)

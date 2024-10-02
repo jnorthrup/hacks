@@ -9,7 +9,10 @@ def clean_text(text):
     # Remove multiple spaces
     text = re.sub(r'\s+', ' ', text)
     # Remove leading/trailing whitespace
-    return text.strip()
+    text = text.strip()
+    # Remove any remaining non-printable characters
+    text = ''.join(char for char in text if char.isprintable() or char.isspace())
+    return text
 
 def is_prefix(a, b):
     return b.startswith(a)

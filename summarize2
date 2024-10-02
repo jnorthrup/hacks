@@ -57,11 +57,11 @@ summarize_segment() {
     local SEGMENT_TEXT="$1"
 
     if $USE_FABRIC; then
-        fabric -p summarize <<< "$SEGMENT_TEXT"
+        fabric -p summarize <<< "$SEGMENT_TEXT" || return 1
     else
         # Use ollama for summarization
         prom=(This transcript needs to be given a topic sentence, followed by the salient points made by the conversation and followed up by a conclusion. You will use markdown layouts without a lot of special chars. Nuggets need a timestamp in the format '00:00:00 sentence' to link to the source media in our comment parser. Be fully candid with language shared. You are a workaholic addicted to perfect kmeans-like division of large captions equally spacing the contents being summarized or noting which parts to skip to. Your summary below: )
-        ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT"
+        ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT" || return 1
     fi
 }
 
@@ -108,7 +108,11 @@ process_vtt() {
 
     # Clean the VTT transcript
     local CLEANED_TRANSCRIPT="${CACHED_VTT%.vtt}_cleaned.txt"
-    sed 's/<[^>]*>//g' "$CACHED_VTT" | awk '!/^WEBVTT/ && NF > 0' | sed 's/^[ \t]*//;s/[ \t]*$//' > "$CLEANED_TRANSCRIPT"
+    python3 vttclean.py "$CACHED_VTT" > "$CLEANED_TRANSCRIPT"
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to clean the VTT file." >&2
+        exit 1
+    fi
 
     # Calculate and print the workplan (number of segments)
     TOTAL_WORDS=$(wc -w "$CLEANED_TRANSCRIPT" | awk '{print $1}')
@@ -123,28 +127,45 @@ process_vtt() {
     MAX_WORDS_PER_TILE=500
     current_words=0
     segment_text=""
-    while read -r line; do
+    segment_count=0
+    > "$SUMMARY_FILE"  # Clear the summary file
+
+    while IFS= read -r line || [ -n "$line" ]; do
         words_in_line=$(echo "$line" | wc -w)
         current_words=$((current_words + words_in_line))
 
         if [ "$current_words" -le "$MAX_WORDS_PER_TILE" ]; then
-            segment_text="$segment_text\n$line"
+            segment_text="${segment_text}${line}\n"
         else
             # Process the current segment
+            segment_count=$((segment_count + 1))
+            echo "Processing segment $segment_count..." >&2
             summary=$(summarize_segment "$segment_text")
+            if [ $? -ne 0 ]; then
+                echo "Error: Failed to summarize segment $segment_count." >&2
+                exit 1
+            fi
             echo "$summary" >> "$SUMMARY_FILE"
 
             # Reset for the next segment
-            segment_text="$line"
+            segment_text="${line}\n"
             current_words=$words_in_line
         fi
     done < "$CLEANED_TRANSCRIPT"
 
     # Summarize the last segment
     if [ -n "$segment_text" ]; then
+        segment_count=$((segment_count + 1))
+        echo "Processing final segment $segment_count..." >&2
         summary=$(summarize_segment "$segment_text")
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to summarize final segment $segment_count." >&2
+            exit 1
+        fi
         echo "$summary" >> "$SUMMARY_FILE"
     fi
+
+    echo "Summarization complete. Processed $segment_count segments." >&2
 
     # Versioned summary output
     local VERSION=1

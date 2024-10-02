@@ -8,6 +8,9 @@ WHISPCC="$HOME/.local/bin/whisper.cpp"
 OLLAMA_MODEL="mistral:latest"
 OLLAMA_MODEL="llama3.1:latest"
 
+# Global variable to track job queue
+JOB_QUEUE=()
+
 # Ensure output and cache directories exist
 mkdir -p "$OUTPUT_DIR" "$CACHE_DIR"
 
@@ -60,6 +63,22 @@ summarize_segment() {
         prom=(This transcript needs to be given a topic sentence, followed by the salient points made by the conversation and followed up by a conclusion. You will use markdown layouts without a lot of special chars. Nuggets need a timestamp in the format '00:00:00 sentence' to link to the source media in our comment parser. Be fully candid with language shared. You are a workaholic addicted to perfect kmeans-like division of large captions equally spacing the contents being summarized or noting which parts to skip to. Your summary below: )
         ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT"
     fi
+}
+
+# Function to add a job to the queue
+add_job() {
+    JOB_QUEUE+=("$@")
+}
+
+# Function to process the job queue
+process_job_queue() {
+    local JOB_COUNT=${#JOB_QUEUE[@]}
+    echo "Processing job queue ($JOB_COUNT jobs)..."
+    for (( i=0; i<JOB_COUNT; i++ )); do
+        echo "Processing job $((i+1))/$JOB_COUNT: ${JOB_QUEUE[$i]}"
+        # Execute the job (replace with actual job execution logic)
+        eval "${JOB_QUEUE[$i]}"
+    done
 }
 
 # Function to process a VTT file (generate summary and handle versioning)
@@ -120,6 +139,9 @@ process_vtt() {
     cat "$SUMMARY_FILE"
 }
 
+# Add any processing tasks to the job queue
+add_job "process_vtt \"$1\""
+
 # Main script logic
 if [[ "$1" == *.vtt ]]; then
     echo "Processing as VTT file..."
@@ -173,3 +195,5 @@ else
     echo "Error: Invalid input. Provide a valid URL, VTT file, or a local audio file."
     exit 1
 fi
+
+process_job_queue

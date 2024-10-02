@@ -1,11 +1,10 @@
 #!/bin/bash
 
 # Configuration (adjust these paths)
-MODEL_PATH="$HOME/.local/share/models/ggml-small.en-tdrz.bin"
+MODEL_PATH="$HOME/.cache/whisper.cpp/ggml-small.en-tdrz.bin"
 OUTPUT_DIR="$HOME/processed_audio"
 CACHE_DIR="/tmp/summarize_cache"
-VTT_CLEANER_SCRIPT="$HOME/bin/vttclean.py"
-WHISPCC="$HOME/work/whisper.cpp/main"
+WHISPCC="$HOME/.local/bin/whisper.cpp"
 OLLAMA_MODEL="mistral:latest"
 OLLAMA_MODEL="llama3.1:latest"
 
@@ -45,6 +44,24 @@ cache_file() {
     echo "$CACHE_FILE"
 }
 
+# Function to clean text from a VTT file
+clean_text() {
+    sed 's/<[^>]*>//g' | tr -s ' ' | sed 's/^[ \t]*//;s/[ \t]*$//'
+}
+
+# Function to summarize a segment of text
+summarize_segment() {
+    local SEGMENT_TEXT="$1"
+
+    if $USE_FABRIC; then
+        fabric -p summarize <<< "$SEGMENT_TEXT"
+    else
+        # Use ollama for summarization
+        prom=(This transcript needs to be given a topic sentence, followed by the salient points made by the conversation and followed up by a conclusion. You will use markdown layouts without a lot of special chars. Nuggets need a timestamp in the format '00:00:00 sentence' to link to the source media in our comment parser. Be fully candid with language shared. You are a workaholic addicted to perfect kmeans-like division of large captions equally spacing the contents being summarized or noting which parts to skip to. Your summary below: )
+        ollama run "$OLLAMA_MODEL" "${prom[*]}" <<< "$SEGMENT_TEXT"
+    fi
+}
+
 # Function to process a VTT file (generate summary and handle versioning)
 process_vtt() {
     local VTT_FILE="$1"
@@ -52,30 +69,38 @@ process_vtt() {
     local CACHED_VTT=$(cache_file "$VTT_FILE" ".vtt")
 
     # Clean the VTT transcript
-    TXT_FILE="${CACHED_VTT%.vtt}.txt"
-    python3 "$VTT_CLEANER_SCRIPT" "$CACHED_VTT" > "$TXT_FILE"
+    local CLEANED_TRANSCRIPT="${CACHED_VTT%.vtt}_cleaned.txt"
+    sed 's/<[^>]*>//g' "$CACHED_VTT" | awk '!/^WEBVTT/ && NF > 0' | sed 's/^[ \t]*//;s/[ \t]*$//' > "$CLEANED_TRANSCRIPT"
 
     # Generate summary (always fresh)
     SUMMARY_FILE="${BASE_NAME}_summary.txt"
     echo "Summarizing transcript..."
-    if $USE_FABRIC; then
-        fabric -p summarize -o "$SUMMARY_FILE" < "$TXT_FILE"
-    else
-        prom=(This transcript needs to be given a
-          topic sentence, followed by the salient
-          points made by the conversation and
-          followed up by a conclusion.
-          you will use markdown layouts without a lot of special chars.
-          nuggets need a timestamp in the format '00:00:00 sentence'
-          to link to the source media in our comment parser.
-          be fully candid with language shared.  You are a
-          workaholic addicted to perfect kmeans-like division of large captions
-          equally spacing the contents being summarized or noting
-          which parts to skip to. your summary below: )
 
-        ollama run "$OLLAMA_MODEL" "${prom[*]}" < "$TXT_FILE" > "$SUMMARY_FILE"
+    # Tiling for large transcripts
+    MAX_WORDS_PER_TILE=500
+    current_words=0
+    segment_text=""
+    while read -r line; do
+        words_in_line=$(echo "$line" | wc -w)
+        current_words=$((current_words + words_in_line))
 
+        if [ "$current_words" -le "$MAX_WORDS_PER_TILE" ]; then
+            segment_text="$segment_text\n$line"
+        else
+            # Process the current segment
+            summary=$(summarize_segment "$segment_text")
+            echo "$summary" >> "$SUMMARY_FILE"
 
+            # Reset for the next segment
+            segment_text="$line"
+            current_words=$words_in_line
+        fi
+    done < "$CLEANED_TRANSCRIPT"
+
+    # Summarize the last segment
+    if [ -n "$segment_text" ]; then
+        summary=$(summarize_segment "$segment_text")
+        echo "$summary" >> "$SUMMARY_FILE"
     fi
 
     # Versioned summary output
@@ -86,14 +111,13 @@ process_vtt() {
     cp "$SUMMARY_FILE" "${BASE_NAME}_summary_v${VERSION}.txt"
 
     # Copy transcript without versioning
-    cp "$TXT_FILE" "${BASE_NAME}.txt"
+    cp "$CLEANED_TRANSCRIPT" "${BASE_NAME}.txt"
 
     echo "Processing complete!"
     echo "Files available:"
     echo " - Transcript: ${BASE_NAME}.txt"
     echo " - Summary: ${BASE_NAME}_summary_v${VERSION}.txt"
     cat "$SUMMARY_FILE"
-
 }
 
 # Main script logic

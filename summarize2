@@ -1,61 +1,16 @@
 #!/bin/bash
 
-# Define paths and variables
-MODEL_PATH="/Users/jim/work/whisper.cpp/models/ggml-small.en-tdrz.bin"
-WHISPCC="/path/to/whisper.cpp"
-OUTPUT_AUDIO_FORMAT="wav"  # Default to WAV if not specified
-DISABLE_AUDIO=false
+# Declare an array to hold file paths or URLs
+declare -a inputs=()
 
-# Function to add a job to the queue
-add_job() {
-    echo "Adding job: $1"
+# Function to process each input (file path or URL)
+function process_input {
+    local input=$1
+    echo "Processing $input..."
+    # Your processing logic here
 }
 
-# Function to process VTT file
-process_vtt() {
-    local vtt_file=$1
-    local input_file=$2
-    echo "Processing VTT for $input_file..."
-    # Add your processing logic here
-}
-
-# Function to run Whisper-CPP and generate VTT transcript
-run_whisper_cpp() {
-    local wav_file=$1
-    echo "Running Whisper-CPP to generate VTT transcript..."
-    "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$wav_file"
-}
-
-# Function to process job queue (dummy function since we don't have a real queue)
-process_job_queue() {
-    echo "Processing job queue..."
-}
-
-# Check if the model file exists
-if [ ! -f "$MODEL_PATH" ]; then
-    echo "Error: Model file not found at $MODEL_PATH. Please check the path and try again." >&2
-    exit 1
-fi
-
-# Main script logic
-if [[ $1 == http://* ]] || [[ $1 == https://* ]]; then
-    echo "Processing as URL..."
-    WAV_FILE=$(mktemp).wav
-    ffmpeg -i "$1" -f wav "$WAV_FILE"
-    echo " - Audio: $WAV_FILE"
-
-    if [ "$OUTPUT_AUDIO_FORMAT" == "ogg" ]; then
-        OGG_FILE="${WAV_FILE%.wav}.ogg"
-        ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 16k -vbr on -compression_level 10 "$OGG_FILE"
-        echo " - Audio: $OGG_FILE"
-        rm "$WAV_FILE"
-    else
-        VTT_FILE="${WAV_FILE%.wav}.vtt"
-        add_job "process_vtt \"$VTT_FILE\" \"$1\""
-    fi
-elif [ -f "$1" ]; then
-    echo "Processing as local audio file..."
-    WAV_FILE="$1"
-
-    if [ "$OUTPUT_AUDIO_FORMAT" == "ogg" ]; then
-        OGG_FILE="${WAV_FILE%.*}
+# Main script logic: iterate over the array and process each element
+for input in "${inputs[@]}"; do 
+    process_input "$input"
+done

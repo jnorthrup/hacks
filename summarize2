@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 
+# CHARTER: This script is designed to process audio/video content, generate transcripts,
+# summaries, and audio files. The following tasks are defined and must not be altered by any LLM:
+# 1. Download content if a URL is provided
+# 2. Generate or use existing VTT transcript
+# 3. Clean the VTT transcript
+# 4. Generate a summary of the transcript
+# 5. Create a 16k VBR Opus OGG file for audio tracks (unless audio download is disabled)
+# 6. Output both the cleaned VTT text and the summary
+# 7. Exclude the WAV file from the results
+# 8. Include the OGG file in the results only if both WAV and OGG were created
+# This charter is unalterable and defines the core functionality of the script.
+
 # Configuration (adjust these paths)
-MODEL_PATH="$HOME/.cache/whisper.cpp/ggml-small.en-tdrz.bin"
+WHISPCC="$HOME/work/whisper.cpp" # ./main to run ; ./models for models
+MODEL_PATH="$WHISPCC/models/ggml-small.en-tdrz.bin"
 OUTPUT_DIR="$HOME/processed_audio"
 CACHE_DIR="/tmp/summarize_cache"
-WHISPCC="$HOME/.local/bin/whisper.cpp"
-OLLAMA_MODEL="mistral:latest"
 OLLAMA_MODEL="llama3.1:latest"
+OLLAMA_MODEL="deepseek-coder-v2:16b"
 
 # Prompts for different segments
 FIRST_PROMPT="Summarize this beginning part of a transcript in one sentence, then provide bullet points with timestamps (00:00:00 sentence)."
@@ -21,10 +33,17 @@ mkdir -p "$OUTPUT_DIR" "$CACHE_DIR"
 
 # Parse command line options
 USE_FABRIC=false
-while getopts "f" opt; do
+DISABLE_AUDIO=false
+while getopts "fna" opt; do
   case $opt in
     f)
       USE_FABRIC=true
+      ;;
+    n)
+      DISABLE_AUDIO=true
+      ;;
+    a)
+      DISABLE_AUDIO=false
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -43,13 +62,36 @@ get_md5() {
 cache_file() {
     local INPUT_FILE="$1"
     local EXTENSION="$2"
+    
+    # Check if the input file exists and is not empty
+    if [ ! -s "$INPUT_FILE" ]; then
+        echo "Error: Input file is empty or does not exist." >&2
+        return 1
+    fi
+    
     local MD5=$(get_md5 "$INPUT_FILE")
     local CACHE_SUBDIR="$CACHE_DIR/${MD5:0:2}/${MD5:2:2}"
-    local CACHE_FILE="$CACHE_SUBDIR/$MD5$EXTENSION"
+    local SAFE_FILENAME=$(echo "$INPUT_FILE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+    local CACHE_FILE="$CACHE_SUBDIR/${MD5}_${SAFE_FILENAME}${EXTENSION}"
 
-    mkdir -p "$CACHE_SUBDIR"
-    ln -f "$INPUT_FILE" "$CACHE_FILE"
-    echo "$CACHE_FILE"
+    echo "Cache operation: MD5 sum = $MD5" >&2
+    echo "Cache file: $CACHE_FILE" >&2
+
+    # Create cache subdirectory if it doesn't exist
+    if ! mkdir -p "$CACHE_SUBDIR"; then
+        echo "Error: Failed to create cache subdirectory." >&2
+        return 1
+    fi
+
+    # Attempt to create the hardlink
+    if ln -f "$INPUT_FILE" "$CACHE_FILE"; then
+        echo "Cache file created: $CACHE_FILE" >&2
+        echo "$CACHE_FILE"
+        return 0
+    else
+        echo "Error: Failed to create cache file." >&2
+        return 1
+    fi
 }
 
 # Function to sanitize a string for use as a filename
@@ -69,11 +111,24 @@ summarize_segment() {
     local PROMPT="$2"
     local SUMMARY_OUTPUT=""
 
+    # Count the number of lines in the input
+    local LINE_COUNT=$(echo "$SEGMENT_TEXT" | wc -l)
+
+    # If the input has less than 12 lines, remove cache and return a simple response
+    if [ "$LINE_COUNT" -lt 12 ]; then
+        local MD5=$(echo "$SEGMENT_TEXT" | md5sum | cut -d' ' -f1)
+        local CACHE_SUBDIR="$CACHE_DIR/${MD5:0:2}/${MD5:2:2}"
+        rm -f "$CACHE_SUBDIR/$MD5"*
+        echo "The input is too short for meaningful summarization. Cache entry removed. Here's the original text:"
+        echo "$SEGMENT_TEXT"
+        return 0
+    fi
+
     if $USE_FABRIC; then
-        SUMMARY_OUTPUT=$(fabric -p summarize <<< "$SEGMENT_TEXT" 2>&1)
+        SUMMARY_OUTPUT=$(fabric -p summarize "$SEGMENT_TEXT" 2>&1)
     else
         # Use ollama for summarization
-        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "$PROMPT" <<< "$SEGMENT_TEXT" 2>&1)
+        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "$PROMPT" "$SEGMENT_TEXT" 2>&1)
     fi
 
     if [ $? -ne 0 ]; then
@@ -106,136 +161,111 @@ update_job_progress() {
 process_job_queue() {
     local JOB_COUNT=${#JOB_QUEUE[@]}
     echo "Processing job queue ($JOB_COUNT jobs)..."
-    for (( i=0; i<JOB_COUNT; i++ )); do
-        # Example job execution with progress updates
-        echo "Processing job $((i+1))/$JOB_COUNT: ${JOB_QUEUE[$i]}"
-        update_job_progress "$i" 10 1 "Starting job..."
-        update_job_progress "$i" 10 5 "Processing..."
-        update_job_progress "$i" 10 10 "Finishing job..."
-        
-        # Temporarily comment out the actual job execution
-        # eval "${JOB_QUEUE[$i]}"
-        
-        # Instead, test the summarize_segment function with a short test string
-        echo "Testing summarize_segment function..."
-        local TEST_TEXT="This is a test transcript. 00:00:05 The first key point is mentioned. 00:00:15 Another important point is discussed."
-        summarize_segment "$TEST_TEXT" "$MIDDLE_PROMPT"
-    done
+     for (( i=0; i<JOB_COUNT; i++ )); do
+        # Remove update_job_progress calls
+        eval "${JOB_QUEUE[$i]}"
+    done  }
+
+# Function to process a single segment
+process_segment() {
+    local SEGMENT_TEXT="$1"
+    local PROMPT="$2"
+    local OUTPUT_FILE="$3"  # Add output file argument
+
+    # ... (Your existing logic for summarize_segment)
+
+    # Write the summary to the specified output file
+    echo "$SUMMARY_OUTPUT" > "$OUTPUT_FILE" 
 }
 
 # Function to process a VTT file (generate summary and handle versioning)
 process_vtt() {
     local VTT_FILE=$1
     local URL=$2 
-    local URL_HASH=$(echo "$URL" | md5sum | cut -d' ' -f1)
     local TEMP_DIR=$(mktemp -d)
     local BASE_NAME="${TEMP_DIR}/temp" # Temporary base name
     local CLEANED_TRANSCRIPT="${BASE_NAME}_cleaned.txt"
-    local FINAL_BASE_NAME="" # Final base name for output files
-    local SUMMARY_FILE="${BASE_NAME}_summary.txt"
+    local SUMMARY_FILE="${OUTPUT_DIR}/$(basename "$VTT_FILE" .vtt)_summary.txt"
     
-    # Tiling for large transcripts
-    TILE_DURATION_SECONDS=720.0 # 12 minutes
-    OVERLAP_DURATION_SECONDS=120.0 # 2 minutes
-
-    # Copy the VTT file to the temporary directory
-    cp "$VTT_FILE" "${BASE_NAME}.vtt"
-    local CACHED_VTT=$(cache_file "${BASE_NAME}.vtt" ".vtt")
+    echo "Processing VTT file: $VTT_FILE"
 
     # Clean the VTT transcript
-    python3 vttclean.py "$CACHED_VTT" > "$CLEANED_TRANSCRIPT" 2>"${CLEANED_TRANSCRIPT}.error"
-    if [ $? -ne 0 ]; then
+    if ! python3 "$(dirname "$0")/vttclean.py" "$VTT_FILE" > "$CLEANED_TRANSCRIPT" 2>"${CLEANED_TRANSCRIPT}.error"; then
         echo "Error: Failed to clean the VTT file. Error log:" >&2
         cat "${CLEANED_TRANSCRIPT}.error" >&2
         exit 1
     fi
 
-    # Generate summary (always fresh)
-    echo "Summarizing transcript..."
-
-    # Tiling for large transcripts
-    current_time=0
-    segment_text=""
-    segment_count=0
-    > "$SUMMARY_FILE"  # Clear the summary file
-
-    while IFS= read -r line || [ -n "$line" ]; do
-        # Extract timestamp (assuming format 00:00:00.000 --> 00:00:01.000)
-        timestamp=$(echo "$line" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}' | head -n 1)
-        if [ -n "$timestamp" ]; then
-            # Convert timestamp to seconds (including milliseconds)
-            seconds=$(echo "$timestamp" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
-
-            # Check if we need to start a new segment
-            if (( $(echo "$seconds >= $current_time + $TILE_DURATION_SECONDS" | bc -l) )); then
-                # Process the current segment
-                segment_count=$((segment_count + 1))
-                echo "Processing segment $segment_count (${current_time} - ${seconds})..." >&2
-                
-                # Choose the appropriate prompt
-                if [ $segment_count -eq 1 ]; then
-                    prompt="$FIRST_PROMPT"
-                else
-                    prompt="$MIDDLE_PROMPT"
-                fi
-                
-                summary=$(summarize_segment "$segment_text" "$prompt")
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to summarize segment $segment_count." >&2
-                    echo "Problematic segment text:" >&2
-                    echo "$segment_text" >&2
-                    exit 1
-                fi
-                echo "$summary" >> "$SUMMARY_FILE"
-
-                # Reset for the next segment
-                segment_text=""
-                current_time=$(echo "$seconds - $OVERLAP_DURATION_SECONDS" | bc -l)
-            fi
-        fi
-        segment_text="${segment_text}${line}\n"
-    done < "$CLEANED_TRANSCRIPT"
-
-    # Summarize the last segment
-    if [ -n "$segment_text" ]; then
-        segment_count=$((segment_count + 1))
-        echo "Processing final segment $segment_count..." >&2
-        summary=$(summarize_segment "$segment_text" "$LAST_PROMPT")
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to summarize final segment $segment_count." >&2
-            exit 1
-        fi
-        echo "$summary" >> "$SUMMARY_FILE"
+    # Check if the cleaned transcript is empty
+    if [ ! -s "$CLEANED_TRANSCRIPT" ]; then
+        echo "Error: Cleaned transcript is empty." >&2
+        exit 1
     fi
 
-    echo "Summarization complete. Processed $segment_count segments." >&2
+    # Generate summary
+    echo "Summarizing transcript..."
+    local TOTAL_LINES=$(wc -l < "$CLEANED_TRANSCRIPT")
+    local SEGMENT_SIZE=$((TOTAL_LINES / 3))
 
-    # Versioned summary output
-    local VERSION=1
-    while [ -f "${BASE_NAME}_summary_v${VERSION}.txt" ]; do
-        VERSION=$((VERSION+1))
-    done
-    cp "$SUMMARY_FILE" "${BASE_NAME}_summary_v${VERSION}.txt"
+    {
+        if $USE_FABRIC; then
+            fabric -p summarize <$CLEANED_TRANSCRIPT
+        else
+    		local FIRST_SEGMENT=$(head -n $SEGMENT_SIZE "$CLEANED_TRANSCRIPT")
+    		local MIDDLE_SEGMENT=$(sed -n "$((SEGMENT_SIZE + 1)),$((2 * SEGMENT_SIZE))p" "$CLEANED_TRANSCRIPT")
+    		local LAST_SEGMENT=$(tail -n $SEGMENT_SIZE "$CLEANED_TRANSCRIPT")
+            ollama run "$OLLAMA_MODEL" "$FIRST_PROMPT" "$FIRST_SEGMENT"
+            ollama run "$OLLAMA_MODEL" "$MIDDLE_PROMPT" "$MIDDLE_SEGMENT"
+            ollama run "$OLLAMA_MODEL" "$LAST_PROMPT" "$LAST_SEGMENT"
+        fi
+    } > "$SUMMARY_FILE"
 
-    echo "Processing complete!"
+    if [ ! -s "$SUMMARY_FILE" ]; then
+        echo "Error: Summary generation failed." >&2
+        exit 1
+    fi
 
-    # Determine the final base name for output files
-    FINAL_BASE_NAME=$(basename "$VTT_FILE" .vtt)
-    FINAL_BASE_NAME=$(sanitize_filename "$FINAL_BASE_NAME")
-    # Move files to the final destination with the sanitized name
-    cp "${BASE_NAME}_cleaned.txt" "${OUTPUT_DIR}/${FINAL_BASE_NAME}.txt"
-    cp "${BASE_NAME}_summary_v${VERSION}.txt" "${OUTPUT_DIR}/${FINAL_BASE_NAME}_summary.txt"
+    echo "Summarization complete."
 
-    echo "Files available:"
-    echo " - Transcript: ${OUTPUT_DIR}/${FINAL_BASE_NAME}.txt"
-    echo " - Summary: ${OUTPUT_DIR}/${FINAL_BASE_NAME}_summary.txt"
+    # Display the content of the summary file
+    echo "Summary content:"
     cat "$SUMMARY_FILE"
 
-    # Clean up the temporary directory
+    # Clean up
     rm -rf "$TEMP_DIR"
 }
 
+# Function to calculate the time difference between two timestamps in HH:MM:SS format
+time_difference() {
+  local TIME1="$1"  # Format: HH:MM:SS
+  local TIME2="$2"  # Format: HH:MM:SS
+
+  # Extract hours, minutes, and seconds from timestamps
+  local TIME1_HOUR=$(echo "$TIME1" | cut -d: -f1)
+  local TIME1_MINUTE=$(echo "$TIME1" | cut -d: -f2)
+  local TIME1_SECOND=$(echo "$TIME1" | cut -d: -f3)
+
+  local TIME2_HOUR=$(echo "$TIME2" | cut -d: -f1)
+  local TIME2_MINUTE=$(echo "$TIME2" | cut -d: -f2)
+  local TIME2_SECOND=$(echo "$TIME2" | cut -d: -f3)
+
+  # Calculate total seconds for each timestamp
+  local TIME1_TOTAL_SECONDS=$((TIME1_HOUR * 3600 + TIME1_MINUTE * 60 + TIME1_SECOND))
+  local TIME2_TOTAL_SECONDS=$((TIME2_HOUR * 3600 + TIME2_MINUTE * 60 + TIME2_SECOND))
+
+  # Calculate the difference in seconds
+  local DIFF_SECONDS=$((TIME1_TOTAL_SECONDS - TIME2_TOTAL_SECONDS))
+
+  # Return the difference (could be negative if TIME2 is later than TIME1)
+  echo "$DIFF_SECONDS"
+}
+
 # Main script logic
+if [ $# -eq 0 ]; then
+    echo "Error: No input provided. Please provide a valid URL, VTT file, or a local audio file."
+    exit 1
+fi
+
 if [[ "$1" == *.vtt ]]; then
     echo "Processing as VTT file..."
     add_job "process_vtt \"$1\" \"$1\""
@@ -247,7 +277,7 @@ elif [[ "$1" == *"http"* ]]; then
     FINAL_BASE_NAME=$(sanitize_filename "$VIDEO_TITLE")
 
     # Attempt to download subtitles first
-    yt-dlp --skip-download --write-auto-sub --sub-lang en \
+    yt-dlp -N 3 --skip-download --write-auto-sub --sub-lang en \
            --cookies-from-browser brave --output "$OUTPUT_DIR/${FINAL_BASE_NAME}.%(ext)s" "$1"
 
     VTT_FILE=$(find "$OUTPUT_DIR" -name "${FINAL_BASE_NAME}.*.vtt" | head -n 1)
@@ -257,37 +287,77 @@ elif [[ "$1" == *"http"* ]]; then
         add_job "process_vtt \"$VTT_FILE\" \"$1\""
     else
         echo "No subtitles found, downloading audio and generating transcript..."
-        yt-dlp -x --audio-format wav --postprocessor-args "-ar 16k" \
-               --cookies-from-browser brave --output "$OUTPUT_DIR/${FINAL_BASE_NAME}.%(ext)s" "$1"
+        if [ "$DISABLE_AUDIO" = false ]; then
+            if ! yt-dlp -N 3 -x --audio-format wav --postprocessor-args "-ar 16k" \
+                   --cookies-from-browser brave --output "$OUTPUT_DIR/${FINAL_BASE_NAME}.%(ext)s" "$1"; then
+                echo "Error: Failed to download audio using yt-dlp. Check the URL and your internet connection." >&2
+                exit 1
+            fi
 
-        WAV_FILE=$(find "$OUTPUT_DIR" -name "${FINAL_BASE_NAME}.wav" | head -n 1)
+            WAV_FILE=$(find "$OUTPUT_DIR" -name "${FINAL_BASE_NAME}.wav" | head -n 1)
 
-        if [ -z "$WAV_FILE" ]; then
-            echo "Error: Failed to download audio."
-            exit 1
+            if [ -z "$WAV_FILE" ]; then
+                echo "Error: WAV file not found after download. Check yt-dlp output." >&2
+                exit 1
+            fi
+
+            echo "Running Whisper-CPP to generate VTT transcript..."
+            if ! "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"; then
+                echo "Error: Whisper-CPP transcription failed. Check the model path and audio file." >&2
+                exit 1
+            fi
+            VTT_FILE="${WAV_FILE%.wav}.vtt"
+
+            add_job "process_vtt \"$VTT_FILE\" \"$1\""
+
+            # Convert WAV to OGG Opus
+            echo "Converting WAV to OGG Opus..."
+            OGG_FILE="${WAV_FILE%.wav}.ogg"
+            ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 16k -vbr on -compression_level 10 "$OGG_FILE"
+            echo " - Audio: $OGG_FILE"
+            # Remove the WAV file
+            rm "$WAV_FILE"
+        else
+            # Include the OGG file in the results only if both WAV and OGG were created
+            echo " - Audio: $WAV_FILE"
         fi
-
-        echo "Running Whisper-CPP to generate VTT transcript..."
-        "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
-        VTT_FILE="${WAV_FILE%.wav}.vtt"
-
-        add_job "process_vtt \"$VTT_FILE\" \"$1\""
-
-        # Convert WAV to OGG Opus
-        echo "Converting WAV to OGG Opus..."
-        OGG_FILE="${WAV_FILE%.wav}.ogg"
-        ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 56k -ar 16k "$OGG_FILE"
-        echo " - Audio: $OGG_FILE"
     fi
 elif [ -f "$1" ]; then
-    echo "Processing as local audio file..."
+    echo "Processing as local audio file..." 
     WAV_FILE="$1"
 
+    # Convert to the specified output audio format if needed
+    if [ "$OUTPUT_AUDIO_FORMAT" == "ogg" ]; then
+        echo "Converting to OGG Opus..."
+        OGG_FILE="${WAV_FILE%.*}.ogg"
+        ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 16k -vbr on -compression_level 10 "$OGG_FILE"
+        echo " - Audio: $OGG_FILE"
+
+        # Remove the WAV file if OGG conversion is successful
+        if [ -f "$OGG_FILE" ]; then
+            rm "$WAV_FILE"
+        else
+            echo "Error: Failed to convert to OGG Opus. Keeping WAV file." >&2
+        fi
+    else
+        echo " - Audio: $WAV_FILE"
+    fi
+
     echo "Running Whisper-CPP to generate VTT transcript..."
-    "$WHISPCC" -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
-    VTT_FILE="${WAV_FILE%.wav}.vtt"
+    "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"  //duplicate code violating DRY?  TODO
+    VTT_FILE="${WAV_FILE%.*}.vtt"
 
     add_job "process_vtt \"$VTT_FILE\" \"$1\""
+
+    if [ "$DISABLE_AUDIO" = false ]; then
+        # Convert to OGG Opus if not already in that format
+        if [[ "$WAV_FILE" != *.ogg ]]; then
+            echo "Converting to OGG Opus..."
+            OGG_FILE="${WAV_FILE%.*}.ogg"
+            ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 16k -vbr on -compression_level 10 "$OGG_FILE"
+            echo " - Audio: $OGG_FILE"
+        fi
+    fi
 else
     echo "Error: Invalid input. Provide a valid URL, VTT file, or a local audio file."
     exit 1

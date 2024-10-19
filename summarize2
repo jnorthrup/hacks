@@ -323,28 +323,20 @@ elif [[ "$1" == *"http"* ]]; then
         fi
     fi
 elif [ -f "$1" ]; then
-    echo "Processing as local audio file..." 
-    WAV_FILE="$1"
+    echo "Processing as local audio file..."
+    AUDIO_FILE="$1"
+    FILE_EXTENSION=$(get_file_extension "$AUDIO_FILE")
 
-    # Convert to the specified output audio format if needed
-    if [ "$OUTPUT_AUDIO_FORMAT" == "ogg" ]; then
-        echo "Converting to OGG Opus..."
-        OGG_FILE="${WAV_FILE%.*}.ogg"
-        ffmpeg -i "$WAV_FILE" -c:a libopus -b:a 16k -vbr on -compression_level 10 "$OGG_FILE"
-        echo " - Audio: $OGG_FILE"
-
-        # Remove the WAV file if OGG conversion is successful
-        if [ -f "$OGG_FILE" ]; then
-            rm "$WAV_FILE"
-        else
-            echo "Error: Failed to convert to OGG Opus. Keeping WAV file." >&2
-        fi
+    if [ "$FILE_EXTENSION" == "wav" ]; then
+        WAV_FILE="$AUDIO_FILE"
     else
-        echo " - Audio: $WAV_FILE"
+        echo "Converting to WAV format..."
+        WAV_FILE="${AUDIO_FILE%.*}.wav"
+        ffmpeg -i "$AUDIO_FILE" -ar 16000 "$WAV_FILE"
     fi
 
     echo "Running Whisper-CPP to generate VTT transcript..."
-    "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"  //duplicate code violating DRY?  TODO
+    "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"
     VTT_FILE="${WAV_FILE%.*}.vtt"
 
     add_job "process_vtt \"$VTT_FILE\" \"$1\""

@@ -27,6 +27,24 @@ This will:
 - Ollama CLI installed and in PATH
 - LMStudio CLI installed and in PATH
 
+## Model Locations
+
+By default, Ollama stores its models in the following directories:
+
+- macOS: `~/.ollama/models`
+- Linux: `/usr/share/ollama/.ollama/models`
+- Windows: `C:\Users\%username%\.ollama\models`
+
+You can override the default location by setting the `OLLAMA_MODELS` environment variable:
+
+```bash
+# Linux/macOS
+export OLLAMA_MODELS=/path/to/your/custom/directory
+
+# Windows (via System Properties > Environment Variables)
+# OLLAMA_MODELS=C:\path\to\your\custom\directory
+```
+
 ## License
 
 MIT License

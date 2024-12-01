@@ -1,5 +1,5 @@
 #!/usr/bin/python3
- 
+
 import re
 import datetime
 import glob
@@ -25,7 +25,7 @@ def process_vtt(content):
 
     processed_captions = []
     buffer = []
-    
+
     def flush_buffer():
         if buffer:
             processed_captions.append(buffer[-1])  # Keep the last (most complete) line
@@ -42,7 +42,7 @@ def process_vtt(content):
                 clean_caption = clean_text(text)
                 if clean_caption:
                     current_line = f"{timestamp} {clean_caption}"
-                    
+
                     if not buffer:
                         buffer.append(current_line)
                     else:
@@ -67,9 +67,8 @@ if __name__ == "__main__":
         for filename in glob.glob(file_pattern):
             with open(filename, 'r', encoding='utf-8') as file:
                 content = file.read()
-
-        result = process_vtt(content)
-        print(result)
+                result = process_vtt(content)
+                print(result)
     except Exception as e:
         print(f"Error processing input: {e}", file=sys.stderr)
         sys.exit(1)

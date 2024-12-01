@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Force-Directed Voronoi Diagram</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+        margin: 0;
+        overflow: hidden;
+    }
+    svg {
+        display: block;
+    }
+  </style>
+</head>
+<body>
+<script>
+  // Dimensions
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+
+  // Create SVG container
+  const svg = d3.select("body")
+      .append("svg")
+      .attr("width", width)
+      .attr("height", height);
+
+  // Random initial dataset
+  let data = d3.range(20).map(() => ({
+      x: Math.random() * width,
+      y: Math.random() * height,
+      value: Math.random()
+  }));
+
+  // Force simulation
+  const simulation = d3.forceSimulation(data)
+      .force("x", d3.forceX(d => d.x).strength(0.5))
+      .force("y", d3.forceY(d => d.y).strength(0.5))
+      .force("collide", d3.forceCollide(50))
+      .on("tick", update);
+
+  // Voronoi diagram generator
+  const voronoi = d3.voronoi()
+      .x(d => d.x)
+      .y(d => d.y)
+      .extent([[0, 0], [width, height]]);
+
+  // Group for Voronoi cells
+  const voronoiGroup = svg.append("g");
+
+  // Group for circles
+  const circleGroup = svg.append("g");
+
+  function update() {
+      const diagram = voronoi(data);
+
+      // Update Voronoi cells
+      const cells = voronoiGroup.selectAll("path")
+          .data(data);
+
+      cells.enter()
+          .append("path")
+          .merge(cells)
+          .attr("d", (d, i) => diagram.renderCell(i))
+          .attr("fill", d => d3.interpolateRainbow(d.value))
+          .attr("stroke", "#000");
+
+      cells.exit().remove();
+
+      // Update circles
+      const circles = circleGroup.selectAll("circle")
+          .data(data);
+
+      circles.enter()
+          .append("circle")
+          .merge(circles)
+          .attr("r", 5)
+          .attr("fill", "black")
+          .attr("cx", d => d.x)
+          .attr("cy", d => d.y);
+
+      circles.exit().remove();
+  }
+
+  // Add a new data point every 2 seconds
+  setInterval(() => {
+      data.push({
+          x: Math.random() * width,
+          y: Math.random() * height,
+          value: Math.random()
+      });
+
+      simulation.nodes(data);
+      simulation.alpha(1).restart();
+  }, 2000);
+</script>
+</body>
+</html>

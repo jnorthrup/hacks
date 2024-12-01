@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# showfiles.sh - Display files with pretty headers
+# Usage:
+#   ./showfiles.sh file1 file2 ...
+
+COLOR=false
+
+# ANSI color codes
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+# Function to print colored header
+print_header() {
+    local filepath=$1
+    local width=$(( ${#filepath} + 8 ))
+    local separator=$(printf '=%.0s' $(seq 1 $width))
+
+    if [ "$COLOR" = true ]; then
+        echo -e "${BLUE}${separator}${NC}"
+        echo -e "${BLUE}=== ${GREEN}${filepath}${BLUE} ===${NC}"
+        echo -e "${BLUE}${separator}${NC}"
+    else
+        echo "$separator"
+        echo "=== $filepath ==="
+        echo "$separator"
+    fi
+}
+
+# Function to display file content
+show_file() {
+    local filepath=$1
+
+    # Skip if not readable
+    if [ ! -r "$filepath" ]; then
+        echo "Error: Cannot read file '$filepath'"
+        return
+    fi
+
+    # Print header
+    print_header "$filepath"
+
+    # Display file content
+    cat "$filepath"
+    echo # Add blank line after file
+}
+
+# Main execution
+for file in "$@"; do
+    show_file "$file"
+done

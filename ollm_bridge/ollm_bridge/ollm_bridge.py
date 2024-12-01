@@ -6,35 +6,39 @@ import argparse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OllmBridge")
 
-def run_command(command):
+def run_command(command, debug=False):
     """Run a command and return its output."""
     try:
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        if debug and result.stderr:
+            logger.debug(f"Command stderr: {result.stderr}")
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed: {e}")
+        if debug:
+            logger.debug(f"Command stderr: {e.stderr}")
         return None
 
-def get_ollama_base_dir():
+def get_ollama_base_dir(debug=False):
     """Retrieve Ollama base directory from CLI."""
     logger.info("Retrieving Ollama base directory...")
-    base_dir = run_command(["ollama", "config", "get", "models_dir"])
+    base_dir = run_command(["ollama", "config", "get", "models_dir"], debug=debug)
     if base_dir:
         logger.info(f"Ollama base directory: {base_dir}")
     return base_dir
 
-def list_ollama_models():
+def list_ollama_models(debug=False):
     """List available models in Ollama."""
     logger.info("Listing Ollama models...")
-    models = run_command(["ollama", "list"])
+    models = run_command(["ollama", "list"], debug=debug)
     if models:
         logger.info(f"Available models: {models.splitlines()}")
-    return models.splitlines()
+    return models.splitlines() if models else []
 
-def get_lmstudio_models_dir():
+def get_lmstudio_models_dir(debug=False):
     """Retrieve LMStudio models directory."""
     logger.info("Retrieving LMStudio models directory...")
-    models_dir = run_command(["lmstudio", "config", "get", "models_dir"])
+    models_dir = run_command(["lmstudio", "config", "get", "models_dir"], debug=debug)
     if models_dir:
         logger.info(f"LMStudio models directory: {models_dir}")
     return models_dir
@@ -60,12 +64,17 @@ def create_symlinks(ollama_dir, lmstudio_dir, models):
 
 def main():
     parser = argparse.ArgumentParser(description="Ollm Bridge Single-Level Symlink Creator")
+    parser.add_argument('-d', '--debug', action='store_true', help='Show debug output including stderr')
     args = parser.parse_args()
 
+    # Set debug level if requested
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        
     # Retrieve configurations
-    ollama_dir = get_ollama_base_dir()
-    lmstudio_dir = get_lmstudio_models_dir()
-    models = list_ollama_models()
+    ollama_dir = get_ollama_base_dir(debug=args.debug)
+    lmstudio_dir = get_lmstudio_models_dir(debug=args.debug)
+    models = list_ollama_models(debug=args.debug)
 
     if not (ollama_dir and lmstudio_dir and models):
         logger.error("Failed to retrieve configurations. Exiting.")

@@ -2,6 +2,7 @@ import subprocess
 import os
 import logging
 import argparse
+from typing import Optional, List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("OllmBridge")
@@ -59,7 +60,35 @@ def list_ollama_models():
             models.append(parts[0])  # First column is model name
     return models
 
-def get_lmstudio_cli_path():
+def check_directory_permissions(directory: str) -> bool:
+    """Check if we have proper permissions for the directory."""
+    try:
+        test_file = os.path.join(directory, '.permission_test')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        return True
+    except (IOError, OSError) as e:
+        logger.error(f"Permission error for directory {directory}: {e}")
+        return False
+
+def validate_model_format(model_path: str) -> bool:
+    """Validate if model file is in supported format."""
+    supported_extensions = ['.gguf', '.ggml']
+    ext = os.path.splitext(model_path)[1].lower()
+    return ext in supported_extensions
+
+def check_lmstudio_version() -> bool:
+    """Check LM Studio version and compatibility."""
+    lmstudio_cli = get_lmstudio_cli_path()
+    version = run_command([lmstudio_cli, "version"])
+    if version:
+        logger.info(f"LM Studio version: {version}")
+        # Add version compatibility logic here
+        return True
+    return False
+
+def get_lmstudio_cli_path() -> str:
     """Get the platform-specific LM Studio CLI path."""
     if os.name == 'nt':  # Windows
         return 'lmstudio'  # Assuming it's in PATH
@@ -80,8 +109,8 @@ def get_lmstudio_models_dir():
     logger.error("Could not determine LM Studio models directory")
     return None
 
-def get_model_files(ollama_dir, model_name):
-    """Get the actual model files."""
+def get_model_files(ollama_dir: str, model_name: str) -> List[str]:
+    """Get the actual model files with format validation."""
     manifest_dir = os.path.join(ollama_dir, "manifests", "registry.ollama.ai")
     
     # Check both library and custom paths
@@ -95,7 +124,11 @@ def get_model_files(ollama_dir, model_name):
         if os.path.exists(path):
             for root, _, filenames in os.walk(path):
                 for filename in filenames:
-                    files.append(os.path.join(root, filename))
+                    file_path = os.path.join(root, filename)
+                    if validate_model_format(file_path):
+                        files.append(file_path)
+                    else:
+                        logger.warning(f"Skipping unsupported format: {file_path}")
                     
     return files
 
@@ -139,6 +172,11 @@ def main():
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug mode enabled")
         
+    # Check LM Studio version
+    if not check_lmstudio_version():
+        logger.error("LM Studio version check failed. Exiting.")
+        return
+        
     # Retrieve configurations
     ollama_dir = get_ollama_models_dir()
     lmstudio_dir = get_lmstudio_models_dir()
@@ -146,6 +184,11 @@ def main():
 
     if not (ollama_dir and lmstudio_dir and models):
         logger.error("Failed to retrieve configurations. Exiting.")
+        return
+
+    # Check directory permissions
+    if not check_directory_permissions(lmstudio_dir):
+        logger.error("Insufficient permissions for LM Studio directory. Exiting.")
         return
 
     # Create symlinks

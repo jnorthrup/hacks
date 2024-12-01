@@ -52,9 +52,18 @@ def list_ollama_models(debug=False):
     """List available models in Ollama."""
     logger.info("Listing Ollama models...")
     models = run_command(["ollama", "list"], debug=debug)
-    if models:
-        logger.info(f"Available models: {models.splitlines()}")
-    return models.splitlines() if models else []
+    if not models:
+        return []
+        
+    # Parse the output to get model names
+    model_list = []
+    for line in models.splitlines()[1:]:  # Skip header line
+        parts = line.split()
+        if parts:
+            model_list.append(parts[0])  # First column is model name
+            
+    logger.info(f"Found models: {model_list}")
+    return model_list
 
 def get_lmstudio_models_dir(debug=False):
     """Retrieve LMStudio models directory."""
@@ -64,30 +73,59 @@ def get_lmstudio_models_dir(debug=False):
         logger.info(f"LMStudio models directory: {models_dir}")
     return models_dir
 
+def get_model_files(ollama_dir, model_name, debug=False):
+    """Get the actual model files for a given model name."""
+    manifest_dir = os.path.join(ollama_dir, "manifests", "registry.ollama.ai")
+    
+    # Handle both library and custom namespaces
+    possible_paths = [
+        os.path.join(manifest_dir, "library", model_name),
+        os.path.join(manifest_dir, model_name),
+    ]
+    
+    model_files = []
+    for path in possible_paths:
+        if os.path.exists(path):
+            # Get all files in the manifest directory
+            for root, _, files in os.walk(path):
+                for file in files:
+                    model_files.append(os.path.join(root, file))
+                    
+    if debug:
+        logger.debug(f"Found model files for {model_name}: {model_files}")
+        
+    return model_files
+
 def create_symlinks(ollama_dir, lmstudio_dir, models):
-    """Create symbolic links for models at a single level."""
+    """Create symbolic links for models."""
     logger.debug(f"Creating symlinks from {ollama_dir} to {lmstudio_dir}")
-    logger.debug(f"Models to process: {models}")
     
     for model in models:
-        model_path = os.path.join(ollama_dir, model)
-        symlink_path = os.path.join(lmstudio_dir, model)
-        logger.debug(f"Processing model: {model}")
-        logger.debug(f"Source path: {model_path}")
-        logger.debug(f"Target path: {symlink_path}")
-
-        if not os.path.exists(model_path):
-            logger.warning(f"Model path does not exist: {model_path}")
+        # Create model directory in LMStudio
+        model_dir = os.path.join(lmstudio_dir, model)
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Get model files
+        model_files = get_model_files(ollama_dir, model)
+        
+        if not model_files:
+            logger.warning(f"No files found for model: {model}")
             continue
-
-        try:
-            if not os.path.exists(symlink_path):
-                os.symlink(model_path, symlink_path)
-                logger.info(f"Created symlink: {symlink_path} -> {model_path}")
-            else:
-                logger.debug(f"Symlink already exists: {symlink_path}")
-        except OSError as e:
-            logger.error(f"Failed to create symlink for {model_path}: {e}")
+            
+        # Create symlinks for each file
+        for src_file in model_files:
+            # Create relative path structure in target
+            rel_path = os.path.relpath(src_file, os.path.join(ollama_dir, "manifests"))
+            target_path = os.path.join(model_dir, os.path.basename(src_file))
+            
+            try:
+                if not os.path.exists(target_path):
+                    os.symlink(src_file, target_path)
+                    logger.info(f"Created symlink: {target_path} -> {src_file}")
+                else:
+                    logger.debug(f"Symlink already exists: {target_path}")
+            except OSError as e:
+                logger.error(f"Failed to create symlink for {src_file}: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Ollm Bridge - Create symbolic links from Ollama models to LMStudio")

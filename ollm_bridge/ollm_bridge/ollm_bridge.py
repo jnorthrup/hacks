@@ -252,9 +252,9 @@ def main():
     if args.dry_run:
         logger.info("Dry run mode - previewing changes:")
         for model in models:
-            model_files = get_model_files(ollama_dir, model)
+            model_files = get_model_files(source_dir, model)
             for src_file in model_files:
-                target_path = os.path.join(lmstudio_dir, model, os.path.basename(src_file))
+                target_path = os.path.join(target_dir, model, os.path.basename(src_file))
                 logger.info(f"Would create: {target_path} -> {src_file}")
         return
 

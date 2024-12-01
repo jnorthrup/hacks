@@ -22,17 +22,17 @@ def run_command(command, debug=False):
             logger.debug(f"Command stderr: {e.stderr}")
         return None
 
-def get_ollama_base_dir(debug=False):
-    """Retrieve Ollama base directory."""
-    logger.info("Retrieving Ollama base directory...")
+def get_ollama_models_dir():
+    """Retrieve Ollama models directory."""
+    logger.info("Retrieving Ollama models directory...")
     
-    # First check OLLAMA_MODELS environment variable
+    # Check environment variable first
     base_dir = os.environ.get("OLLAMA_MODELS")
     if base_dir:
         logger.info(f"Using OLLAMA_MODELS environment variable: {base_dir}")
         return base_dir
         
-    # If env var not set, use platform-specific default paths
+    # Platform-specific paths
     if os.name == 'nt':  # Windows
         base_dir = os.path.expandvars(r'C:\Users\%USERNAME%\.ollama\models')
     elif os.name == 'posix':  # macOS and Linux
@@ -41,60 +41,59 @@ def get_ollama_base_dir(debug=False):
         else:  # macOS
             base_dir = os.path.expanduser('~/.ollama/models')
     
-    if base_dir:
-        logger.info(f"Using default Ollama base directory: {base_dir}")
-    else:
-        logger.error("Could not determine Ollama models directory")
-        
-    return base_dir
+    if os.path.exists(base_dir):
+        logger.info(f"Using Ollama base directory: {base_dir}")
+        return base_dir
+    
+    logger.error("Ollama models directory not found")
+    return None
 
-def list_ollama_models(debug=False):
-    """List available models in Ollama."""
+def list_ollama_models():
+    """List models using Ollama CLI."""
     logger.info("Listing Ollama models...")
-    models = run_command(["ollama", "list"], debug=debug)
-    if not models:
+    result = run_command(["ollama", "list"])
+    if not result:
         return []
         
-    # Parse the output to get model names
-    model_list = []
-    for line in models.splitlines()[1:]:  # Skip header line
+    models = []
+    for line in result.splitlines()[1:]:  # Skip header line
         parts = line.split()
         if parts:
-            model_list.append(parts[0])  # First column is model name
+            models.append(parts[0])  # First column is model name
             
-    logger.info(f"Found models: {model_list}")
-    return model_list
+    logger.info(f"Found models: {models}")
+    return models
 
-def get_lmstudio_models_dir(debug=False):
-    """Retrieve LMStudio models directory."""
-    logger.info("Retrieving LMStudio models directory...")
-    models_dir = run_command(["lmstudio", "config", "get", "models_dir"], debug=debug)
+def get_lmstudio_models_dir():
+    """Retrieve LM Studio models directory using CLI."""
+    logger.info("Retrieving LM Studio models directory...")
+    models_dir = run_command(["lmstudio", "config", "get", "models_dir"])
+    
     if models_dir:
-        logger.info(f"LMStudio models directory: {models_dir}")
-    return models_dir
+        logger.info(f"LM Studio models directory: {models_dir}")
+        return models_dir
+    
+    logger.error("Could not determine LM Studio models directory")
+    return None
 
-def get_model_files(ollama_dir, model_name, debug=False):
-    """Get the actual model files for a given model name."""
+def get_model_files(ollama_dir, model_name):
+    """Get the actual model files."""
     manifest_dir = os.path.join(ollama_dir, "manifests", "registry.ollama.ai")
     
-    # Handle both library and custom namespaces
+    # Check both library and custom paths
     possible_paths = [
         os.path.join(manifest_dir, "library", model_name),
         os.path.join(manifest_dir, model_name),
     ]
     
-    model_files = []
+    files = []
     for path in possible_paths:
         if os.path.exists(path):
-            # Get all files in the manifest directory
-            for root, _, files in os.walk(path):
-                for file in files:
-                    model_files.append(os.path.join(root, file))
+            for root, _, filenames in os.walk(path):
+                for filename in filenames:
+                    files.append(os.path.join(root, filename))
                     
-    if debug:
-        logger.debug(f"Found model files for {model_name}: {model_files}")
-        
-    return model_files
+    return files
 
 def create_symlinks(ollama_dir, lmstudio_dir, models):
     """Create symbolic links for models."""
@@ -128,19 +127,18 @@ def create_symlinks(ollama_dir, lmstudio_dir, models):
                 logger.error(f"Failed to create symlink for {src_file}: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Ollm Bridge - Create symbolic links from Ollama models to LMStudio")
+    parser = argparse.ArgumentParser(description="Create symbolic links from Ollama models to LMStudio")
     parser.add_argument('-d', '--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
-    # Set debug level if requested
     if args.debug:
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug mode enabled")
         
     # Retrieve configurations
-    ollama_dir = get_ollama_base_dir(debug=args.debug)
-    lmstudio_dir = get_lmstudio_models_dir(debug=args.debug)
-    models = list_ollama_models(debug=args.debug)
+    ollama_dir = get_ollama_models_dir()
+    lmstudio_dir = get_lmstudio_models_dir()
+    models = list_ollama_models()
 
     if not (ollama_dir and lmstudio_dir and models):
         logger.error("Failed to retrieve configurations. Exiting.")

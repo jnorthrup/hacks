@@ -24,8 +24,6 @@ def run_command(command, debug=False):
 
 def get_ollama_models_dir():
     """Retrieve Ollama models directory."""
-    logger.info("Retrieving Ollama models directory...")
-    
     # Check environment variable first
     base_dir = os.environ.get("OLLAMA_MODELS")
     if base_dir:
@@ -50,7 +48,6 @@ def get_ollama_models_dir():
 
 def list_ollama_models():
     """List models using Ollama CLI."""
-    logger.info("Listing Ollama models...")
     result = run_command(["ollama", "list"])
     if not result:
         return []
@@ -60,19 +57,14 @@ def list_ollama_models():
         parts = line.split()
         if parts:
             models.append(parts[0])  # First column is model name
-            
-    logger.info(f"Found models: {models}")
     return models
 
 def get_lmstudio_models_dir():
     """Retrieve LM Studio models directory using CLI."""
-    logger.info("Retrieving LM Studio models directory...")
     models_dir = run_command(["lmstudio", "config", "get", "models_dir"])
-    
     if models_dir:
         logger.info(f"LM Studio models directory: {models_dir}")
         return models_dir
-    
     logger.error("Could not determine LM Studio models directory")
     return None
 

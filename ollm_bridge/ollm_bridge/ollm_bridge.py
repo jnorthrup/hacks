@@ -88,6 +88,16 @@ def check_lmstudio_version() -> bool:
         return True
     return False
 
+def import_model(model_path: str, cli_path: str, cli_name: str) -> bool:
+    """Import a model using the specified CLI tool."""
+    logger.info(f"Importing model using {cli_name}: {model_path}")
+    result = run_command([cli_path, "import", model_path])
+    if result:
+        logger.info(f"Successfully imported model: {model_path}")
+        return True
+    logger.error(f"Failed to import model: {model_path}")
+    return False
+
 def get_lmstudio_cli_path() -> str:
     """Get the platform-specific LM Studio CLI path."""
     if os.name == 'nt':  # Windows
@@ -132,42 +142,64 @@ def get_model_files(ollama_dir: str, model_name: str) -> List[str]:
                     
     return files
 
-def create_symlinks(ollama_dir, lmstudio_dir, models):
-    """Create symbolic links for models."""
-    logger.debug(f"Creating symlinks from {ollama_dir} to {lmstudio_dir}")
+def create_symlinks(source_dir: str, target_dir: str, models: List[str],
+                   link_type: str = 'soft', force: bool = False):
+    """Create links for models with specified link type."""
+    logger.debug(f"Creating {link_type} links from {source_dir} to {target_dir}")
     
     for model in models:
-        # Create model directory in LMStudio
-        model_dir = os.path.join(lmstudio_dir, model)
+        model_dir = os.path.join(target_dir, model)
         os.makedirs(model_dir, exist_ok=True)
         
-        # Get model files
-        model_files = get_model_files(ollama_dir, model)
+        model_files = get_model_files(source_dir, model)
         
         if not model_files:
             logger.warning(f"No files found for model: {model}")
             continue
             
-        # Create symlinks for each file
         for src_file in model_files:
-            # Create relative path structure in target
-            rel_path = os.path.relpath(src_file, os.path.join(ollama_dir, "manifests"))
             target_path = os.path.join(model_dir, os.path.basename(src_file))
             
-            try:
-                if not os.path.exists(target_path):
-                    os.symlink(src_file, target_path)
-                    logger.info(f"Created symlink: {target_path} -> {src_file}")
+            # Handle existing links/files
+            if os.path.exists(target_path):
+                if force:
+                    try:
+                        os.unlink(target_path)
+                    except OSError as e:
+                        logger.error(f"Failed to remove existing link: {e}")
+                        continue
                 else:
-                    logger.debug(f"Symlink already exists: {target_path}")
+                    logger.debug(f"Skipping existing link: {target_path}")
+                    continue
+            
+            try:
+                if link_type == 'hard':
+                    os.link(src_file, target_path)
+                elif link_type == 'ntfs' and os.name == 'nt':
+                    run_command(["mklink", target_path, src_file])
+                else:  # soft link (default)
+                    os.symlink(src_file, target_path)
+                    
+                logger.info(f"Created {link_type} link: {target_path} -> {src_file}")
             except OSError as e:
-                logger.error(f"Failed to create symlink for {src_file}: {e}")
+                logger.error(f"Failed to create {link_type} link for {src_file}: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Create symbolic links from Ollama models to LMStudio")
+    parser = argparse.ArgumentParser(
+        description="Create symbolic links between Ollama and LMStudio models",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument('-d', '--debug', action='store_true', help='Enable debug output')
     parser.add_argument('-i', '--interactive', action='store_true', help='Enable interactive model selection')
     parser.add_argument('--dry-run', action='store_true', help='Preview changes without making them')
+    
+    # Add new bidirectional options
+    parser.add_argument('--direction', choices=['ollama-to-lmstudio', 'lmstudio-to-ollama'],
+                       default='ollama-to-lmstudio', help='Direction of model linking')
+    parser.add_argument('--link-type', choices=['soft', 'hard', 'ntfs'],
+                       default='soft', help='Type of link to create')
+    parser.add_argument('--force', action='store_true', help='Force overwrite existing links')
+    parser.add_argument('--import-only', action='store_true', help='Only import models, no linking')
     args = parser.parse_args()
 
     if args.debug:
@@ -179,18 +211,27 @@ def main():
         logger.error("LM Studio version check failed. Exiting.")
         return
         
-    # Retrieve configurations
-    ollama_dir = get_ollama_models_dir()
-    lmstudio_dir = get_lmstudio_models_dir()
-    models = list_ollama_models()
+    # Determine source and target based on direction
+    if args.direction == 'lmstudio-to-ollama':
+        source_dir = get_lmstudio_models_dir()
+        target_dir = get_ollama_models_dir()
+        cli_path = "ollama"
+        cli_name = "Ollama"
+        models = list_ollama_models()
+    else:  # ollama-to-lmstudio
+        source_dir = get_ollama_models_dir()
+        target_dir = get_lmstudio_models_dir()
+        cli_path = get_lmstudio_cli_path()
+        cli_name = "LMStudio"
+        models = list_ollama_models()
 
-    if not (ollama_dir and lmstudio_dir and models):
+    if not (source_dir and target_dir and models):
         logger.error("Failed to retrieve configurations. Exiting.")
         return
 
     # Check directory permissions
-    if not check_directory_permissions(lmstudio_dir):
-        logger.error("Insufficient permissions for LM Studio directory. Exiting.")
+    if not check_directory_permissions(target_dir):
+        logger.error(f"Insufficient permissions for {cli_name} directory. Exiting.")
         return
 
     # Handle interactive mode
@@ -217,8 +258,24 @@ def main():
                 logger.info(f"Would create: {target_path} -> {src_file}")
         return
 
-    # Create symlinks
-    create_symlinks(ollama_dir, lmstudio_dir, models)
+    if args.import_only:
+        for model in models:
+            model_files = get_model_files(source_dir, model)
+            for file in model_files:
+                import_model(file, cli_path, cli_name)
+        return
+
+    if args.dry_run:
+        logger.info("Dry run mode - previewing changes:")
+        for model in models:
+            model_files = get_model_files(source_dir, model)
+            for src_file in model_files:
+                target_path = os.path.join(target_dir, model, os.path.basename(src_file))
+                logger.info(f"Would create: {target_path} -> {src_file}")
+        return
+
+    create_symlinks(source_dir, target_dir, models,
+                   link_type=args.link_type, force=args.force)
 
 if __name__ == "__main__":
     main()

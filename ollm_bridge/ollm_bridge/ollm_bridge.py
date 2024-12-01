@@ -166,6 +166,8 @@ def create_symlinks(ollama_dir, lmstudio_dir, models):
 def main():
     parser = argparse.ArgumentParser(description="Create symbolic links from Ollama models to LMStudio")
     parser.add_argument('-d', '--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('-i', '--interactive', action='store_true', help='Enable interactive model selection')
+    parser.add_argument('--dry-run', action='store_true', help='Preview changes without making them')
     args = parser.parse_args()
 
     if args.debug:
@@ -189,6 +191,30 @@ def main():
     # Check directory permissions
     if not check_directory_permissions(lmstudio_dir):
         logger.error("Insufficient permissions for LM Studio directory. Exiting.")
+        return
+
+    # Handle interactive mode
+    if args.interactive:
+        print("\nAvailable models:")
+        for i, model in enumerate(models, 1):
+            print(f"{i}. {model}")
+        choices = input("\nEnter numbers of models to link (space-separated) or press Enter for all: ").strip()
+        
+        if choices:
+            try:
+                selected_indices = [int(i)-1 for i in choices.split() if i.isdigit()]
+                models = [models[i] for i in selected_indices if 0 <= i < len(models)]
+            except (ValueError, IndexError):
+                logger.error("Invalid selection. Using all models.")
+
+    # Handle dry run mode
+    if args.dry_run:
+        logger.info("Dry run mode - previewing changes:")
+        for model in models:
+            model_files = get_model_files(ollama_dir, model)
+            for src_file in model_files:
+                target_path = os.path.join(lmstudio_dir, model, os.path.basename(src_file))
+                logger.info(f"Would create: {target_path} -> {src_file}")
         return
 
     # Create symlinks

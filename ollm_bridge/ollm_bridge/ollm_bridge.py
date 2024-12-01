@@ -59,9 +59,21 @@ def list_ollama_models():
             models.append(parts[0])  # First column is model name
     return models
 
+def get_lmstudio_cli_path():
+    """Get the platform-specific LM Studio CLI path."""
+    if os.name == 'nt':  # Windows
+        return 'lmstudio'  # Assuming it's in PATH
+    elif os.name == 'posix':  # macOS and Linux
+        if os.path.exists('/usr/share/ollama'):  # Linux
+            return 'lmstudio'  # Assuming it's in PATH
+        else:  # macOS
+            return os.path.expanduser('~/.cache/lm-studio/bin/lms')
+    return 'lmstudio'  # Default fallback
+
 def get_lmstudio_models_dir():
     """Retrieve LM Studio models directory using CLI."""
-    models_dir = run_command(["lmstudio", "config", "get", "models_dir"])
+    lmstudio_cli = get_lmstudio_cli_path()
+    models_dir = run_command([lmstudio_cli, "config", "get", "models_dir"])
     if models_dir:
         logger.info(f"LM Studio models directory: {models_dir}")
         return models_dir

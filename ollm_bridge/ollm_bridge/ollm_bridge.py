@@ -9,9 +9,12 @@ logger = logging.getLogger("OllmBridge")
 def run_command(command, debug=False):
     """Run a command and return its output."""
     try:
+        logger.debug(f"Running command: {command}")
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        if debug and result.stderr:
-            logger.debug(f"Command stderr: {result.stderr}")
+        if debug:
+            logger.debug(f"Command stdout: {result.stdout}")
+            if result.stderr:
+                logger.debug(f"Command stderr: {result.stderr}")
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         logger.error(f"Command failed: {e}")
@@ -45,9 +48,15 @@ def get_lmstudio_models_dir(debug=False):
 
 def create_symlinks(ollama_dir, lmstudio_dir, models):
     """Create symbolic links for models at a single level."""
+    logger.debug(f"Creating symlinks from {ollama_dir} to {lmstudio_dir}")
+    logger.debug(f"Models to process: {models}")
+    
     for model in models:
         model_path = os.path.join(ollama_dir, model)
         symlink_path = os.path.join(lmstudio_dir, model)
+        logger.debug(f"Processing model: {model}")
+        logger.debug(f"Source path: {model_path}")
+        logger.debug(f"Target path: {symlink_path}")
 
         if not os.path.exists(model_path):
             logger.warning(f"Model path does not exist: {model_path}")
@@ -58,18 +67,19 @@ def create_symlinks(ollama_dir, lmstudio_dir, models):
                 os.symlink(model_path, symlink_path)
                 logger.info(f"Created symlink: {symlink_path} -> {model_path}")
             else:
-                logger.info(f"Symlink already exists: {symlink_path}")
+                logger.debug(f"Symlink already exists: {symlink_path}")
         except OSError as e:
             logger.error(f"Failed to create symlink for {model_path}: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Ollm Bridge Single-Level Symlink Creator")
-    parser.add_argument('-d', '--debug', action='store_true', help='Show debug output including stderr')
+    parser = argparse.ArgumentParser(description="Ollm Bridge - Create symbolic links from Ollama models to LMStudio")
+    parser.add_argument('-d', '--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
     # Set debug level if requested
     if args.debug:
         logger.setLevel(logging.DEBUG)
+        logger.debug("Debug mode enabled")
         
     # Retrieve configurations
     ollama_dir = get_ollama_base_dir(debug=args.debug)

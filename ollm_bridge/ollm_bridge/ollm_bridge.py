@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def run_command(command):
@@ -75,7 +74,14 @@ def main(args=None):
         args = sys.argv[1:]
 
     parser = argparse.ArgumentParser(description="Ollm Bridge - Link Ollama models to LMStudio")
+    parser.add_argument('-d', '--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args(args)
+    
+    # Configure logging based on debug flag
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format='%(levelname)s:%(name)s:%(message)s'
+    )
     
     logger.info("Ollm Bridge starting...")
     

@@ -1,69 +1,49 @@
 #!/usr/bin/python3
 
 import re
-import datetime
 import glob
 import sys
 
 def clean_text(text):
-    # Remove HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
-    # Remove multiple spaces
-    text = re.sub(r'\s+', ' ', text)
-    # Remove leading/trailing whitespace
-    return text.strip()
-
-def is_prefix(a, b):
-    return b.startswith(a)
+    """Removes HTML tags, multiple spaces, and leading/trailing whitespace."""
+    text = re.sub(r'<[^>]+>|\s+', ' ', text).strip()
+    return text
 
 def process_vtt(content):
-    # Remove WEBVTT header and metadata
-    content = re.sub(r'^WEBVTT\n.*?\n\n', '', content, flags=re.DOTALL)
-
-    # Split into captions
-    captions = re.split(r'\n\n+', content)
+    """Processes a VTT file to clean and extract subtitles."""
 
     processed_captions = []
-    buffer = []
+    lines = content.splitlines()
 
-    def flush_buffer():
-        if buffer:
-            processed_captions.append(buffer[-1])  # Keep the last (most complete) line
-            buffer.clear()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        match = re.match(r'(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})', line)
+        if match:
+            start_timestamp = match.group(1)
+            i += 1
+            subtitle_lines = []
+            while i < len(lines) and lines[i].strip():
+                subtitle_lines.append(lines[i])
+                i += 1
 
-    for caption in captions:
-        lines = caption.split('\n')
-        if len(lines) >= 2:
-            # Extract only the start time and remove milliseconds
-            timestamp_match = re.match(r'(\d{2}:\d{2}:\d{2})\.(\d{3})', lines[0])
-            if timestamp_match:
-                timestamp = f"{timestamp_match.group(1)}.{timestamp_match.group(2)}"
-                text = ' '.join(lines[1:])
-                clean_caption = clean_text(text)
-                if clean_caption:
-                    current_line = f"{timestamp} {clean_caption}"
+            subtitle_text = ' '.join(subtitle_lines)
+            cleaned_text = clean_text(subtitle_text)
 
-                    if not buffer:
-                        buffer.append(current_line)
-                    else:
-                        _, prev_text = buffer[-1].split(' ', 1)
-                        if is_prefix(prev_text, clean_caption):
-                            buffer.append(current_line)
-                        else:
-                            flush_buffer()
-                            buffer.append(current_line)
-
-    flush_buffer()  # Don't forget to flush the buffer at the end
+            if cleaned_text:
+                processed_captions.append(f"{start_timestamp} {cleaned_text}")
+        else:
+            i += 1
 
     return '\n'.join(processed_captions)
 
 if __name__ == "__main__":
-    try:
-        if len(sys.argv) < 2:
-            print("Usage: python vttclean.py <file_pattern>", file=sys.stderr)
-            sys.exit(1)
+    if len(sys.argv) < 2:
+        print("Usage: python vttclean.py <file_pattern>", file=sys.stderr)
+        sys.exit(1)
 
-        file_pattern = sys.argv[1]
+    file_pattern = sys.argv[1]
+    try:
         for filename in glob.glob(file_pattern):
             with open(filename, 'r', encoding='utf-8') as file:
                 content = file.read()

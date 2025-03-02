@@ -13,17 +13,10 @@
 # This charter is unalterable and defines the core functionality of the script.
 
 # Configuration (adjust these paths)
-WHISPCC="$HOME/work/whisper.cpp" # ./main to run ; ./models for models
+WHISPCC="$HOME/work/whisper.cpp"
 MODEL_PATH="$WHISPCC/models/ggml-small.en-tdrz.bin"
 OUTPUT_DIR="$HOME/processed_audio"
 CACHE_DIR="/tmp/summarize_cache"
-OLLAMA_MODEL="llama3.1:latest"
-OLLAMA_MODEL="deepseek-coder-v2:16b"
-
-# Prompts for different segments
-FIRST_PROMPT="Summarize this beginning part of a transcript in one sentence, then provide bullet points with timestamps (00:00:00 sentence)."
-MIDDLE_PROMPT="Summarize the key points of this part of the transcript in bullet points with timestamps (00:00:00 sentence)."
-LAST_PROMPT="Summarize the main takeaways of this final part of the transcript in bullet points with timestamps (00:00:00 sentence)."
 
 # Global variable to track job queue
 JOB_QUEUE=()
@@ -36,10 +29,7 @@ USE_FABRIC=false
 DISABLE_AUDIO=false
 DURATION=""
 while getopts "fnad:" opt; do
-  case $opt in
-    f)
-      USE_FABRIC=true
-      ;;
+  case $opt in 
     n)
       DISABLE_AUDIO=true
       ;;
@@ -109,40 +99,6 @@ clean_text() {
     sed 's/<[^>]*>//g' | tr -s ' ' | sed 's/^[ \t]*//;s/[ \t]*$//'
 }
 
-# Function to summarize a segment of text
-summarize_segment() {
-    local SEGMENT_TEXT="$1"
-    local PROMPT="$2"
-    local SUMMARY_OUTPUT=""
-
-    # Count the number of lines in the input
-    local LINE_COUNT=$(echo "$SEGMENT_TEXT" | wc -l)
-
-    # If the input has less than 12 lines, remove cache and return a simple response
-    if [ "$LINE_COUNT" -lt 12 ]; then
-        local MD5=$(echo "$SEGMENT_TEXT" | md5sum | cut -d' ' -f1)
-        local CACHE_SUBDIR="$CACHE_DIR/${MD5:0:2}/${MD5:2:2}"
-        rm -f "$CACHE_SUBDIR/$MD5"*
-        echo "The input is too short for meaningful summarization. Cache entry removed. Here's the original text:"
-        echo "$SEGMENT_TEXT"
-        return 0
-    fi
-
-    if $USE_FABRIC; then
-        SUMMARY_OUTPUT=$(fabric -p summarize "$SEGMENT_TEXT" 2>&1)
-    else
-        # Use ollama for summarization
-        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "$PROMPT" "$SEGMENT_TEXT" 2>&1)
-    fi
-
-    if [ $? -ne 0 ]; then
-        echo "Error in summarization: $SUMMARY_OUTPUT" >&2
-        return 1
-    fi
-
-    echo "$SUMMARY_OUTPUT"
-}
-
 # Function to add a job to the queue
 add_job() {
     JOB_QUEUE+=("$@")
@@ -171,43 +127,7 @@ process_job_queue() {
     done
 }
 
-# Function to process a single segment
-process_segment() {
-    local SEGMENT_TEXT="$1"
-    local PROMPT="$2"
-    local OUTPUT_FILE="$3"
-    local SUMMARY_OUTPUT=""
-
-    # Count the number of lines in the input
-    local LINE_COUNT=$(echo "$SEGMENT_TEXT" | wc -l)
-
-    # If the input has less than 12 lines, remove cache and return a simple response
-    if [ "$LINE_COUNT" -lt 12 ]; then
-        local MD5=$(echo "$SEGMENT_TEXT" | md5sum | cut -d' ' -f1)
-        local CACHE_SUBDIR="$CACHE_DIR/${MD5:0:2}/${MD5:2:2}"
-        rm -f "$CACHE_SUBDIR/$MD5"*
-        echo "The input is too short for meaningful summarization. Cache entry removed. Here's the original text:"
-        echo "$SEGMENT_TEXT" > "$OUTPUT_FILE"
-        return 0
-    fi
-
-    if $USE_FABRIC; then
-        SUMMARY_OUTPUT=$(fabric -p summarize "$SEGMENT_TEXT" 2>&1)
-    else
-        # Use ollama for summarization
-        SUMMARY_OUTPUT=$(ollama run "$OLLAMA_MODEL" "$PROMPT" "$SEGMENT_TEXT" 2>&1)
-    fi
-
-    if [ $? -ne 0 ]; then
-        echo "Error in summarization: $SUMMARY_OUTPUT" >&2
-        return 1
-    fi
-
-    # Write the summary to the specified output file
-    echo "$SUMMARY_OUTPUT" > "$OUTPUT_FILE"
-}
-
-# Function to process a VTT file (generate summary and handle versioning)
+# Function to process a VTT file (generate summary and versioning)
 process_vtt() {
     local VTT_FILE=$1
     local URL=$2
@@ -231,79 +151,9 @@ process_vtt() {
         exit 1
     fi
 
-    # Generate summary
-    echo "Summarizing transcript..."
-    local TOTAL_LINES=$(wc -l < "$CLEANED_TRANSCRIPT")
-    local SEGMENT_SIZE=$((TOTAL_LINES / 3))
-    local FIRST_SEGMENT=$(head -n $SEGMENT_SIZE "$CLEANED_TRANSCRIPT")
-    local MIDDLE_SEGMENT=$(sed -n "$((SEGMENT_SIZE + 1)),$((2 * SEGMENT_SIZE))p" "$CLEANED_TRANSCRIPT")
-    local LAST_SEGMENT=$(tail -n $SEGMENT_SIZE "$CLEANED_TRANSCRIPT")
-
-    {
-        echo "Generating summary for first segment..."
-        if $USE_FABRIC; then
-            fabric -p summarize "$FIRST_SEGMENT"
-        else
-            ollama run "$OLLAMA_MODEL" "$FIRST_PROMPT" "$FIRST_SEGMENT"
-        fi
-
-        echo "Generating summary for middle segment..."
-        if $USE_FABRIC; then
-            fabric -p summarize "$MIDDLE_SEGMENT"
-        else
-            ollama run "$OLLAMA_MODEL" "$MIDDLE_PROMPT" "$MIDDLE_SEGMENT"
-        fi
-
-        echo "Generating summary for last segment..."
-        if $USE_FABRIC; then
-            fabric -p summarize "$LAST_SEGMENT"
-        else
-            ollama run "$OLLAMA_MODEL" "$LAST_PROMPT" "$LAST_SEGMENT"
-        fi
-    } > "$SUMMARY_FILE"
-
-    if [ ! -s "$SUMMARY_FILE" ]; then
-        echo "Error: Summary generation failed." >&2
-        exit 1
-    fi
-
-    echo "Summarization complete."
-
-    # Display the content of the summary file
-    echo "Summary content:"
-    echo "----------------------------------------"
-    cat "$SUMMARY_FILE"
-    echo "----------------------------------------"
-
-    # Clean up
     rm -rf "$TEMP_DIR"
 }
-
-# Function to calculate the time difference between two timestamps in HH:MM:SS format
-time_difference() {
-    local TIME1="$1"  # Format: HH:MM:SS
-    local TIME2="$2"  # Format: HH:MM:SS
-
-    # Extract hours, minutes, and seconds from timestamps
-    local TIME1_HOUR=$(echo "$TIME1" | cut -d: -f1)
-    local TIME1_MINUTE=$(echo "$TIME1" | cut -d: -f2)
-    local TIME1_SECOND=$(echo "$TIME1" | cut -d: -f3)
-
-    local TIME2_HOUR=$(echo "$TIME2" | cut -d: -f1)
-    local TIME2_MINUTE=$(echo "$TIME2" | cut -d: -f2)
-    local TIME2_SECOND=$(echo "$TIME2" | cut -d: -f3)
-
-    # Calculate total seconds for each timestamp
-    local TIME1_TOTAL_SECONDS=$((TIME1_HOUR * 3600 + TIME1_MINUTE * 60 + TIME1_SECOND))
-    local TIME2_TOTAL_SECONDS=$((TIME2_HOUR * 3600 + TIME2_MINUTE * 60 + TIME2_SECOND))
-
-    # Calculate the difference in seconds
-    local DIFF_SECONDS=$((TIME1_TOTAL_SECONDS - TIME2_TOTAL_SECONDS))
-
-    # Return the difference (could be negative if TIME2 is later than TIME1)
-    echo "$DIFF_SECONDS"
-}
-
+ 
 # Main script logic
 if [ $# -eq 0 ]; then
     echo "Error: No input provided. Please provide a valid URL, VTT file, or a local audio file."
@@ -346,8 +196,8 @@ elif [[ "$1" == *"http"* ]]; then
             fi
 
             echo "Running Whisper-CPP to generate VTT transcript..."
-            if ! "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"; then
-                echo "Error: Whisper-CPP transcription failed. Check the model path and audio file." >&2
+            if ! whisper-cli -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE"; then
+                echo "Error: Whisper-CPP transcription failed." >&2
                 exit 1
             fi
             VTT_FILE="${WAV_FILE%.*}.vtt"
@@ -374,7 +224,7 @@ elif [ -f "$1" ]; then
     # Convert to WAV first if not already WAV
     if [[ "$INPUT_FILE" != *.wav ]]; then
         echo "Converting input to WAV format..."
-        if ! ffmpeg -i "$INPUT_FILE" -ar 16000 -ac 1 -c:a pcm_s16le ${DURATION:+-t "$DURATION"} -y "$WAV_FILE"; then
+        if ! ffmpeg -i "$INPUT_FILE" -ar 16000 -ac 1 -c:a pcm_s16le -y "$WAV_FILE"; then
             echo "Error: Failed to convert input to WAV format." >&2
             exit 1
         fi
@@ -383,13 +233,12 @@ elif [ -f "$1" ]; then
     fi
 
     echo "Running Whisper-CPP to generate VTT transcript..."
-    if ! "$WHISPCC"/main -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE" ; then
+    if ! whisper-cli -ovtt -tdrz -m "$MODEL_PATH" "$WAV_FILE" ; then
         echo "Error: Whisper-CPP transcription failed." >&2
         exit 1
     fi
 
     VTT_FILE="${WAV_FILE%.wav}.vtt"
-    mv "${WAV_FILE}.vtt" "$VTT_FILE"
     add_job "process_vtt \"$VTT_FILE\" \"$1\""
 
     if [ "$DISABLE_AUDIO" = false ]; then

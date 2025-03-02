@@ -13,7 +13,7 @@
 # This charter is unalterable and defines the core functionality of the script.
 
 # Configuration (adjust these paths)
-WHISPCC="$HOME/work/whisper.cpp"
+WHISPCC="$HOME/work/whisper.cpp" # ./main to run ; ./models for models
 MODEL_PATH="$WHISPCC/models/ggml-small.en-tdrz.bin"
 OUTPUT_DIR="$HOME/processed_audio"
 CACHE_DIR="/tmp/summarize_cache"
@@ -29,7 +29,10 @@ USE_FABRIC=false
 DISABLE_AUDIO=false
 DURATION=""
 while getopts "fnad:" opt; do
-  case $opt in 
+  case $opt in
+    f)
+      USE_FABRIC=true
+      ;;
     n)
       DISABLE_AUDIO=true
       ;;
@@ -153,7 +156,32 @@ process_vtt() {
 
     rm -rf "$TEMP_DIR"
 }
- 
+
+# Function to calculate the time difference between two timestamps in HH:MM:SS format
+time_difference() {
+    local TIME1="$1"  # Format: HH:MM:SS
+    local TIME2="$2"  # Format: HH:MM:SS
+
+    # Extract hours, minutes, and seconds from timestamps
+    local TIME1_HOUR=$(echo "$TIME1" | cut -d: -f1)
+    local TIME1_MINUTE=$(echo "$TIME1" | cut -d: -f2)
+    local TIME1_SECOND=$(echo "$TIME1" | cut -d: -f3)
+
+    local TIME2_HOUR=$(echo "$TIME2" | cut -d: -f1)
+    local TIME2_MINUTE=$(echo "$TIME2" | cut -d: -f2)
+    local TIME2_SECOND=$(echo "$TIME2" | cut -d: -f3)
+
+    # Calculate total seconds for each timestamp
+    local TIME1_TOTAL_SECONDS=$((TIME1_HOUR * 3600 + TIME1_MINUTE * 60 + TIME1_SECOND))
+    local TIME2_TOTAL_SECONDS=$((TIME2_HOUR * 3600 + TIME2_MINUTE * 60 + TIME2_SECOND))
+
+    # Calculate the difference in seconds
+    local DIFF_SECONDS=$((TIME1_TOTAL_SECONDS - TIME2_TOTAL_SECONDS))
+
+    # Return the difference (could be negative if TIME2 is later than TIME1)
+    echo "$DIFF_SECONDS"
+}
+
 # Main script logic
 if [ $# -eq 0 ]; then
     echo "Error: No input provided. Please provide a valid URL, VTT file, or a local audio file."
@@ -162,7 +190,7 @@ fi
 
 if [[ "$1" == *.vtt ]]; then
     echo "Processing as VTT file..."
-    add_job "process_vtt \"$1\" \"$1\""
+    add_job "process_vtt \\"$1\\" \\"$1\\""
 elif [[ "$1" == *"http"* ]]; then
     echo "Processing as YouTube URL..."
 
@@ -178,7 +206,7 @@ elif [[ "$1" == *"http"* ]]; then
 
     if [ -n "$VTT_FILE" ]; then
         echo "Subtitles found, processing VTT file..."
-        add_job "process_vtt \"$VTT_FILE\" \"$1\""
+        add_job "process_vtt \\"$VTT_FILE\\" \\"$1\\""
     else
         echo "No subtitles found, downloading audio and generating transcript..."
         if [ "$DISABLE_AUDIO" = false ]; then
@@ -202,7 +230,7 @@ elif [[ "$1" == *"http"* ]]; then
             fi
             VTT_FILE="${WAV_FILE%.*}.vtt"
 
-            add_job "process_vtt \"$VTT_FILE\" \"$1\""
+            add_job "process_vtt \\"$VTT_FILE\\" \\"$1\\""
 
             # Convert WAV to OGG Opus
             echo "Converting WAV to OGG Opus..."
@@ -239,7 +267,7 @@ elif [ -f "$1" ]; then
     fi
 
     VTT_FILE="${WAV_FILE%.wav}.vtt"
-    add_job "process_vtt \"$VTT_FILE\" \"$1\""
+    add_job "process_vtt \\"$VTT_FILE\\" \\"$1\\""
 
     if [ "$DISABLE_AUDIO" = false ]; then
         # Convert to OGG Opus

@@ -104,7 +104,7 @@ clean_text() {
 
 # Function to add a job to the queue
 add_job() {
-    JOB_QUEUE+=("$@")
+    JOB_QUEUE+=("$(printf "%q " "$@")")
 }
 
 # Function to update the progress bar for a job
@@ -133,26 +133,23 @@ process_job_queue() {
 # Function to process a VTT file (generate summary and versioning)
 process_vtt() {
     local VTT_FILE=$1
+    local VTT_FILE_FULL="$1" # Preserve the full VTT filename
     local URL=$2
     local TEMP_DIR=$(mktemp -d)
     local BASE_NAME="${TEMP_DIR}/temp" # Temporary base name
-    local CLEANED_TRANSCRIPT="${BASE_NAME}_cleaned.txt"
     local SUMMARY_FILE="${OUTPUT_DIR}/$(basename "$VTT_FILE" .vtt)_summary.txt"
 
-    echo "Processing VTT file: $VTT_FILE"
+    echo "Processing VTT file: $VTT_FILE_FULL"
 
     # Clean the VTT transcript
-    if ! python3 "$(dirname "$0")/vttclean.py" "$VTT_FILE" > "$CLEANED_TRANSCRIPT" 2>"${CLEANED_TRANSCRIPT}.error"; then
+    CLEANED_TRANSCRIPT=$(unset SUMMARIZE2_CALL python3 "$(dirname "$0")/vttclean.py" "$VTT_FILE_FULL" 2>"${CLEANED_TRANSCRIPT}.error")
+    if [ $? -ne 0 ]; then
         echo "Error: Failed to clean the VTT file. Error log:" >&2
         cat "${CLEANED_TRANSCRIPT}.error" >&2
         exit 1
     fi
 
-    # Check if the cleaned transcript is empty
-    if [ ! -s "$CLEANED_TRANSCRIPT" ]; then
-        echo "Error: Cleaned transcript is empty." >&2
-        exit 1
-    fi
+    echo "Cleaned transcript: $CLEANED_TRANSCRIPT" >&2
 
     rm -rf "$TEMP_DIR"
 }
@@ -163,9 +160,11 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
+echo "Input argument: $1" >&2
+
 if [[ "$1" == *.vtt ]]; then
     echo "Processing as VTT file..."
-    add_job "process_vtt \\"$1\\" \\"$1\\""
+    add_job "process_vtt" "$1" "$1"
 elif [[ "$1" == *"http"* ]]; then
     echo "Processing as YouTube URL..."
 
@@ -181,7 +180,7 @@ elif [[ "$1" == *"http"* ]]; then
 
     if [ -n "$VTT_FILE" ]; then
         echo "Subtitles found, processing VTT file..."
-        add_job "process_vtt \\"$VTT_FILE\\" \\"$1\\""
+        add_job "process_vtt" "$VTT_FILE" "$1"
     else
         echo "No subtitles found, downloading audio and generating transcript..."
         if [ "$DISABLE_AUDIO" = false ]; then
@@ -205,7 +204,7 @@ elif [[ "$1" == *"http"* ]]; then
             fi
             VTT_FILE="${WAV_FILE%.*}.vtt"
 
-            add_job "process_vtt \\"$VTT_FILE\\" \\"$1\\""
+            add_job "process_vtt" "$VTT_FILE" "$1"
 
             # Convert WAV to OGG Opus
             echo "Converting WAV to OGG Opus..."
@@ -242,7 +241,7 @@ elif [ -f "$1" ]; then
     fi
 
     VTT_FILE="${WAV_FILE%.wav}.vtt"
-    add_job "process_vtt \\"$VTT_FILE\\" \\"$1\\""
+    add_job "process_vtt" "$VTT_FILE" "$1"
 
     if [ "$DISABLE_AUDIO" = false ]; then
         # Convert to OGG Opus

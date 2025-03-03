@@ -3,6 +3,8 @@
 import re
 import glob
 import sys
+import os
+import tempfile
 
 def clean_text(text):
     """Removes HTML tags, multiple spaces, and leading/trailing whitespace."""
@@ -18,7 +20,7 @@ def process_vtt(content):
     i = 0
     while i < len(lines):
         line = lines[i]
-        match = re.match(r'(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})', line)
+        match = re.match(r'(\d{2}:\d{2}:\d{2})\.(\d{3}) --> (\d{2}:\d{2}:\d{2})\.(\d{3})', line)
         if match:
             start_timestamp = match.group(1)
             i += 1
@@ -42,13 +44,15 @@ if __name__ == "__main__":
         print("Usage: python vttclean.py <file_pattern>", file=sys.stderr)
         sys.exit(1)
 
-    file_pattern = sys.argv[1]
+    filename = sys.argv[1]
+    print(f"Processing filename: {filename}")
+
     try:
-        for filename in glob.glob(file_pattern):
-            with open(filename, 'r', encoding='utf-8') as file:
-                content = file.read()
-                result = process_vtt(content)
-                print(result)
+        with open(filename, 'r', encoding='utf-8') as file:
+            content = file.read()
+            result = process_vtt(content)
+            print(result)
+
     except Exception as e:
         print(f"Error processing input: {e}", file=sys.stderr)
         sys.exit(1)

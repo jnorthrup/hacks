@@ -90,9 +90,13 @@ clean_transcript_file() {
 
 # Check dependencies
 if [ -z "${MODEL_PATH:-}" ]; then
-    echo "Error: MODEL_PATH environment variable is not set" >&2
+    echo "Error: MODEL_PATH environment variable is not set.  Please set it to the path of your Whisper model." >&2
+    echo "Example: export MODEL_PATH=/path/to/your/ggml-model.bin" >&2
     exit 1
 fi
+
+# Optional: Define a default model path (if appropriate)
+# MODEL_PATH="${MODEL_PATH:-/path/to/default/ggml-model.bin}"
 
 if ! command_exists yt-dlp; then
     echo "Error: yt-dlp is not installed." >&2

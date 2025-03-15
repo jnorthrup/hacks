@@ -5,6 +5,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Get the directory where the script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+CLEANER_SCRIPT="${SCRIPT_DIR}/clean-transcript.py"
+
 # Set the path to the Whisper model
 MODEL_PATH="/Users/jim/work/whisper.cpp/models/ggml-small.en-tdrz.bin"
 
@@ -49,7 +53,7 @@ if [[ "$EXT" == "vtt" || "$EXT" == "out" ]]; then
     echo "Input file is VTT or .out; skipping conversion and transcription."
     echo "Cleaning transcript..."
     # Use process substitution to handle filename escapes
-    python clean-transcript.py "$INPUT" "$TRANSCRIPT_FILE"
+    python "$CLEANER_SCRIPT" "$INPUT" "$TRANSCRIPT_FILE"
     echo "Transcript available at: $TRANSCRIPT_FILE"
     exit 0
 elif [[ "$EXT" != "wav" ]]; then
@@ -67,7 +71,7 @@ whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" > "$TRANSCRIPT_FILE"
 
 # Clean the transcript
 echo "Cleaning transcript..."
-python clean-transcript.py "$TRANSCRIPT_FILE"
+python "$CLEANER_SCRIPT" "$TRANSCRIPT_FILE"
 
 echo "Transcript available at: $TRANSCRIPT_FILE"
 

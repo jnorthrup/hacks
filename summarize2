@@ -1,171 +1,78 @@
 #!/bin/bash
+# Minimal transcription script using whisper-cli with diarization and transcript cleaning.
+
 
 set -euo pipefail
 IFS=$'\n\t'
 
-# --- Helper functions ---
-
-# Check if a command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Download audio from URL
-download_audio() {
-    local URL="$1"
-    echo "Downloading audio from URL: $URL" >&2
-    yt-dlp -f bestaudio --output "downloaded.%(ext)s" "$URL"
-    local INPUT_FILE=$(ls downloaded.* 2>/dev/null | head -n 1)
-    if [[ -z "$INPUT_FILE" ]]; then
-        echo "Error: yt-dlp download failed" >&2
-        return 1
-    fi
-    echo "Downloaded file: $INPUT_FILE" >&2
-    echo "$INPUT_FILE"
-}
-
-# Cache file (dummy implementation)
-cache_file() {
-    local FILE="$1"
-    local SUFFIX="$2"
-    local CACHE="${FILE}${SUFFIX}"
-    if [[ ! -f "$CACHE" ]]; then
-        cp "$FILE" "$CACHE" 2>/dev/null || :
-    fi
-    echo "$CACHE"
-}
-
-# Run whisper-cli
-run_whisper() {
-    local WAV_FILE="$1"
-    local MODEL_PATH="${MODEL_PATH:?Error: MODEL_PATH environment variable not set}"
-    local BASE_NAME="${WAV_FILE%.*}"
-    local OUT_FILE="${BASE_NAME}.out"
-    local CACHE_TRANSCRIPT
-    CACHE_TRANSCRIPT=$(cache_file "$OUT_FILE" ".cached")
-
-    if [[ -s "$CACHE_TRANSCRIPT" ]]; then
-        echo "Reusing cached transcript: $CACHE_TRANSCRIPT" >&2
-        echo "$CACHE_TRANSCRIPT"
-        return 0
-    fi
-
-    echo "Running Whisper-CPP for $WAV_FILE..." >&2
-    if ! whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" > "$OUT_FILE"; then
-        echo "Error: Whisper-CPP transcription failed." >&2
-        rm -f "$OUT_FILE"
-        return 1
-    fi
-
-    cache_file "$OUT_FILE" ".cached"
-    echo "$OUT_FILE"
-}
-
-# Convert to WAV
-convert_to_wav() {
-    local INPUT_FILE="$1"
-    local WAV_FILE="${INPUT_FILE%.*}.wav"
-    echo "Converting $INPUT_FILE to WAV..." >&2
-    if ! ffmpeg -i "$INPUT_FILE" -ar 16k -c:a pcm_s16le -y "$WAV_FILE"; then
-        echo "Error: ffmpeg conversion failed" >&2
-        return 1
-    fi
-    echo "Successfully converted to $WAV_FILE" >&2
-    echo "$WAV_FILE"
-}
-
-# Clean transcript
-clean_transcript_file() {
-    local INPUT_FILE="$1"
-    local EXT="${INPUT_FILE##*.}"
-    echo "Performing cleaning on textual input file: $INPUT_FILE" >&2
-    if [[ "$EXT" == "vtt" ]]; then
-        python vttclean.py "$INPUT_FILE"
-    else
-        python clean-transcript.py "$INPUT_FILE"
-    fi
-}
-
-# --- Main script ---
+# Set the path to the Whisper model
+MODEL_PATH="/Users/jim/work/whisper.cpp/models/ggml-small.en-tdrz.bin"
 
 # Check dependencies
-if [ -z "${MODEL_PATH:-}" ]; then
-    echo "Error: MODEL_PATH environment variable is not set.  Please set it to the path of your Whisper model." >&2
-    echo "Example: export MODEL_PATH=/path/to/your/ggml-model.bin" >&2
-    exit 1
-fi
+for cmd in yt-dlp ffmpeg whisper-cli python; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Error: $cmd is not installed." >&2
+        exit 1
+    fi
+done
 
-# Optional: Define a default model path (if appropriate)
-# MODEL_PATH="${MODEL_PATH:-/path/to/default/ggml-model.bin}"
-
-if ! command_exists yt-dlp; then
-    echo "Error: yt-dlp is not installed." >&2
-    exit 1
-fi
-
-if ! command_exists ffmpeg; then
-    echo "Error: ffmpeg is not installed." >&2
-    exit 1
-fi
-
-if ! command_exists whisper-cli; then
-    echo "Error: whisper-cli is not installed." >&2
-    exit 1
-fi
-
-# Input handling
+# Usage: $0 <input_file_or_url>
 if [[ $# -lt 1 ]]; then
-    echo "Error: Input file not provided" >&2
+    echo "Usage: $0 <input_file_or_url>" >&2
     exit 1
 fi
 
-INPUT_FILE="$1"
+INPUT="$1"
 
-# URL handling
-if [[ "$INPUT_FILE" =~ ^https?:// ]]; then
-    INPUT_FILE=$(download_audio "$INPUT_FILE")
-    if [ -z "$INPUT_FILE" ]; then
+# Use an environment variable for duration
+: "${DURATION:=}"
+FFMPEG_DURATION_ARG=""
+if [[ -n "$DURATION" ]]; then
+    FFMPEG_DURATION_ARG="-t $DURATION"
+fi
+
+# If input is a URL, download audio
+if [[ "$INPUT" =~ ^https?:// ]]; then
+    echo "Downloading audio from URL..."
+    yt-dlp -f bestaudio --output "downloaded.%(ext)s" "$INPUT"
+    INPUT=$(ls downloaded.* | head -n 1)
+    if [[ -z "$INPUT" ]]; then
+        echo "Error: Audio download failed." >&2
         exit 1
     fi
 fi
 
-if [[ ! -f "$INPUT_FILE" ]]; then
-    echo "Error: Input file '$INPUT_FILE' does not exist" >&2
-    exit 1
-fi
-
-# Process textual transcripts directly
-EXT="${INPUT_FILE##*.}"
+# Determine input file type based on extension
+EXT="${INPUT##*.}"
 if [[ "$EXT" == "vtt" || "$EXT" == "out" ]]; then
-    clean_transcript_file "$INPUT_FILE"
+    TRANSCRIPT_FILE="${INPUT%.*}_cleaned.txt"
+    echo "Input file is VTT or .out; skipping conversion and transcription."
+    echo "Cleaning transcript..."
+    # Use process substitution to handle filename escapes
+    python clean-transcript.py "$INPUT" "$TRANSCRIPT_FILE"
+    echo "Transcript available at: $TRANSCRIPT_FILE"
     exit 0
+elif [[ "$EXT" != "wav" ]]; then
+    WAV_FILE="${INPUT%.*}.wav"
+    echo "Converting $INPUT to WAV..."
+    ffmpeg -y -i "$INPUT" $FFMPEG_DURATION_ARG -ar 16000 -c:a pcm_s16le "$WAV_FILE"
+else
+    WAV_FILE="$INPUT"
 fi
 
-# Convert to WAV if necessary
-WAV_FILE="$INPUT_FILE"
+# Run Whisper transcription with diarization
+TRANSCRIPT_FILE="${WAV_FILE%.*}.txt"
+echo "Running Whisper transcription..."
+whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" > "$TRANSCRIPT_FILE"
+
+# Clean the transcript
+echo "Cleaning transcript..."
+python clean-transcript.py "$TRANSCRIPT_FILE"
+
+echo "Transcript available at: $TRANSCRIPT_FILE"
+
+# Cleanup temporary WAV file if conversion was done
 if [[ "$EXT" != "wav" ]]; then
-    WAV_FILE=$(convert_to_wav "$INPUT_FILE")
-    if [ -z "$WAV_FILE" ]; then
-        exit 1
-    fi
-fi
-
-# Run Whisper
-TRANSCRIPT=$(run_whisper "$WAV_FILE")
-if [ -z "$TRANSCRIPT" ]; then
-    exit 1
-fi
-echo "Transcript available at: $TRANSCRIPT"
-
-# Immediately schedule the next job.
-if ! add_job "process_vtt" "${WAV_FILE%.wav}.vtt" "$INPUT_FILE"; then
-    echo "Error: Adding job failed" >&2
-fi
-
-# Cleanup WAV file if it was converted
-if [[ "$EXT" != "wav" ]]; then
-    echo "Cleaning up temporary WAV file: $WAV_FILE" >&2
+    echo "Cleaning up temporary file: $WAV_FILE" >&2
     rm -f "$WAV_FILE"
 fi
-
-exit 0

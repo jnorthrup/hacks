@@ -67,7 +67,7 @@ fi
 # Run Whisper transcription with diarization
 TRANSCRIPT_FILE="${WAV_FILE%.*}.txt"
 echo "Running Whisper transcription..."
-whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" > "$TRANSCRIPT_FILE"
+whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" | tee "$TRANSCRIPT_FILE"
 
 # Clean the transcript
 echo "Cleaning transcript..."

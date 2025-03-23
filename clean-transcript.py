@@ -3,22 +3,39 @@ import sys
 import os
 import re
 import difflib
+
 """
 Explanation
-	•	VTT Detection:
+    •   VTT Detection:
 The script checks if the filename ends with .vtt or if the content starts with “WEBVTT” to decide if VTT processing is needed.
-	•	Stage 1 – VTT Conversion:
-process_vtt() strips the VTT header/metadata, splits captions, and extracts timestamped candidates (converting timestamps to HH:MM:SS).
-	•	Stage 2 – Candidate Merging:
+    •   Stage 1 – VTT Conversion:
+process_vtt() strips the VTT header/metadata, splits captions, and extracts timestamped candidates (converting timestamps to HH:MM:SS.mmm).
+    •   Stage 2 – Candidate Merging:
 Within each caption block, candidate lines are merged using the is_prefix() check. For a group (e.g. TS1, TS2, TS3), the output is the first timestamp (TSB) and the text from the last candidate.
-	•	Additional Cleaning:
+    •   Additional Cleaning:
 The functions remove_line_stuttering() and remove_word_stuttering() then further clean the text by removing near-duplicate lines and repeated words.
 
 This merged, staged approach should address your needs for converting VTT input and handling Whisper’s candidate mismatches.
+
+[00:00:46.360 --> 00:01:03.940]   must become 
+00:00:46.360
+
+TS1 BA
+TS2 BANA
+TS3 BANANA
+
+must become TS1 BANANA
+
 """
+
 def clean_text(text):
     """Remove HTML tags, extra spaces, and trim whitespace."""
     text = re.sub(r'<[^>]+>', '', text)
+    # Remove speaker prefixes like "Robert:" or "Jim:" ONLY at the beginning of the line followed by timestamp in square brackets
+    text = re.sub(r'^\w+:\s+(\[\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\])', r'\1', text)
+    # Remove leading whitespace
+    text = re.sub(r'^\s+', '', text)
+    # never Remove [SPEAKER_TURN] tags 
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
@@ -39,16 +56,16 @@ def process_vtt(content):
     # Split into caption blocks
     captions = re.split(r'\n\n+', content)
     processed_captions = []
-    
+
     for caption in captions:
         lines = caption.split('\n')
         candidates = []
         # Extract candidates matching a timestamp and text.
         # Expecting format: "HH:MM:SS(.mmm)? <text>"
         for line in lines:
-            m = re.match(r'^(\d{2}:\d{2}:\d{2})(?:\.\d{3})?\s+(.*)$', line)
+            m = re.match(r'^(\d{2}:\d{2}:\d{2}\.\d{3})\s+(.*)$', line)
             if m:
-                ts = m.group(1)  # Use only HH:MM:SS
+                ts = m.group(1)
                 txt = clean_text(m.group(2))
                 if txt:
                     candidates.append((ts, txt))
@@ -122,22 +139,12 @@ def clean_transcript(raw_text, is_vtt=False):
     return processed
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: {os.path.basename(sys.argv[0])} <input_file>", file=sys.stderr)
-        sys.exit(1)
-    input_file = sys.argv[1]
-    if not os.path.isfile(input_file):
-        print(f"Error: file '{input_file}' not found.", file=sys.stderr)
-        sys.exit(1)
-    with open(input_file, "r", encoding="utf-8") as f:
-        raw_text = f.read()
+    raw_text = sys.stdin.read()
     # Detect if the file is VTT by extension or by header content.
-    is_vtt = input_file.lower().endswith(".vtt") or raw_text.lstrip().startswith("WEBVTT")
+    filename = os.environ.get('filename', '')
+    is_vtt = filename.lower().endswith('.vtt') or raw_text.startswith('WEBVTT')
     cleaned_text = clean_transcript(raw_text, is_vtt=is_vtt)
-    output_file = os.path.splitext(input_file)[0] + "_cleaned.txt"
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(cleaned_text)
-    print(f"Cleaned transcript saved to: {output_file}")
+    print(cleaned_text)
 
 if __name__ == "__main__":
     main()

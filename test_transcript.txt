@@ -1,0 +1,6 @@
+[00:00:00.000 --> 00:00:05.000] Hello, this is a test transcript.
+[00:00:05.000 --> 00:00:10.000] This is <b>another</b> line with HTML tags.
+[00:00:10.000 --> 00:00:15.000] This line is similar to the previous line
+[00:00:10.000 --> 00:00:15.000] This line is similar to the previous line
+[00:00:15.000 --> 00:00:20.000] word word stuttering example.
+[00:00:20.000 --> 00:00:25.000] This is the the end.

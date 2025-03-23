@@ -1,33 +1,33 @@
-# Ollm Bridge
+**Ollm Bridge**
 
 A Python tool to create symbolic links from Ollama models to LMStudio.
 
-## Installation
+**Installation**
 
-```bash
+````bash
 pip install ollm-bridge
-```
+````
 
-## Usage
+**Usage**
 
 Simply run:
 
-```bash
+````bash
 ollm-bridge
-```
+````
 
 This will:
 1. Detect your Ollama models directory
 2. Detect your LMStudio models directory
 3. Create symbolic links for all Ollama models in the LMStudio directory
 
-## Requirements
+**Requirements**
 
 - Python 3.7+
 - Ollama CLI installed and in PATH
 - LMStudio CLI installed and in PATH
 
-## Model Locations
+**Model Locations**
 
 By default, Ollama stores its models in the following directories:
 
@@ -37,14 +37,14 @@ By default, Ollama stores its models in the following directories:
 
 You can override the default location by setting the `OLLAMA_MODELS` environment variable:
 
-```bash
+````bash
 # Linux/macOS
 export OLLAMA_MODELS=/path/to/your/custom/directory
 
 # Windows (via System Properties > Environment Variables)
 # OLLAMA_MODELS=C:\path\to\your\custom\directory
-```
+````
 
-## License
+**License**
 
 MIT License

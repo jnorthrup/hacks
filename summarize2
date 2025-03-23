@@ -16,6 +16,10 @@ MODEL_PATH="/Users/jim/work/whisper.cpp/models/ggml-small.en-tdrz.bin"
 for cmd in yt-dlp ffmpeg whisper-cli python; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: $cmd is not installed." >&2
+        echo "Please install missing dependencies:"
+        echo "  yt-dlp: pip install yt-dlp"
+        echo "  ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
+        echo "  whisper-cli: Follow installation instructions at https://github.com/ggerganov/whisper.cpp"
         exit 1
     fi
 done
@@ -67,6 +71,8 @@ fi
 # Run Whisper transcription with diarization
 TRANSCRIPT_FILE="${WAV_FILE%.*}.txt"
 echo "Running Whisper transcription..."
+echo "Using model: $MODEL_PATH"
+echo "This may take a while depending on the length of the audio..."
 whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" | tee "$TRANSCRIPT_FILE"
 
 # Clean the transcript
@@ -74,7 +80,11 @@ echo "Cleaning transcript..."
 filename="$TRANSCRIPT_FILE" python "$CLEANER_SCRIPT" < "$TRANSCRIPT_FILE" > "${TRANSCRIPT_FILE}.clean"
 mv "${TRANSCRIPT_FILE}.clean" "$TRANSCRIPT_FILE"
 
+# Create a backup of the original transcript
+cp "$TRANSCRIPT_FILE" "${TRANSCRIPT_FILE}.original"
+
 echo "Transcript available at: $TRANSCRIPT_FILE"
+echo "Original transcript backed up at: ${TRANSCRIPT_FILE}.original"
 
 # Cleanup temporary WAV file if conversion was done
 if [[ "$EXT" != "wav" ]]; then

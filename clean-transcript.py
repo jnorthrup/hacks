@@ -37,6 +37,8 @@ def clean_text(text):
     text = re.sub(r'^\s+', '', text)
     # never Remove [SPEAKER_TURN] tags 
     text = re.sub(r'\s+', ' ', text)
+    # Remove any remaining HTML entities like &quot;
+    text = re.sub(r'&[a-zA-Z]+;', ' ', text)
     return text.strip()
 
 def is_prefix(a, b):
@@ -123,6 +125,11 @@ def remove_word_stuttering(text):
     while text != prev_text:
         prev_text = text
         text = stutter_pattern.sub(r'\1', text)
+    
+    # Also remove triple+ word repetitions (e.g., "hello hello hello")
+    triple_pattern = re.compile(r'\b(\w+)(\s+\1){2,}\b', re.IGNORECASE)
+    text = triple_pattern.sub(r'\1', text)
+    
     return text
 
 def clean_transcript(raw_text, is_vtt=False):

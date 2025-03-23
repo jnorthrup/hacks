@@ -56,7 +56,7 @@ def process_vtt(content):
     # Remove the WEBVTT header and any metadata
     content = re.sub(r'^WEBVTT\n.*?\n\n', '', content, flags=re.DOTALL)
     # Convert timestamp ranges to simple timestamps
-    content = re.sub(r'\[(\d{2}:\d{2}:\d{2})\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\]\s*', r'\1 ', content)
+    content = re.sub(r'\[(\d{2}:\d{2}:\d{2})\.(\d{3}) --> \d{2}:\d{2}:\d{2}\.\d{3}\]\s*', r'\1 ', content)
     # Split into caption blocks
     captions = re.split(r'\n\n+', content)
     processed_captions = []
@@ -67,7 +67,7 @@ def process_vtt(content):
         # Extract candidates matching a timestamp and text.
         # Expecting format: "HH:MM:SS(.mmm)? <text>"
         for line in lines:
-            m = re.match(r'^(\d{2}:\d{2}:\d{2})\s+(.*)$', line)
+            m = re.match(r'^\[?(\d{2}:\d{2}:\d{2})\.?\d*\]?\s*(?:--> \d{2}:\d{2}:\d{2}\.\d{3})?\s+(.*)$', line)
             if m:
                 ts = m.group(1)
                 txt = clean_text(m.group(2))
@@ -153,7 +153,7 @@ def main():
     raw_text = sys.stdin.read()
     # Detect if the file is VTT by extension or by header content.
     filename = os.environ.get('filename', '')
-    is_vtt = filename.lower().endswith('.vtt') or raw_text.startswith('WEBVTT')
+    is_vtt = filename.lower().endswith('.vtt') or raw_text.startswith('WEBVTT') or '[00:00:' in raw_text
     cleaned_text = clean_transcript(raw_text, is_vtt=is_vtt)
     print(cleaned_text)
 

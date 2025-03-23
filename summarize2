@@ -52,8 +52,8 @@ if [[ "$EXT" == "vtt" || "$EXT" == "out" ]]; then
     TRANSCRIPT_FILE="${INPUT%.*}_cleaned.txt"
     echo "Input file is VTT or .out; skipping conversion and transcription."
     echo "Cleaning transcript..."
-    # Use process substitution to handle filename escapes
-    python "$CLEANER_SCRIPT" "$INPUT" "$TRANSCRIPT_FILE"
+    # Pass content through stdin and redirect output to file
+    filename="$INPUT" python "$CLEANER_SCRIPT" < "$INPUT" > "$TRANSCRIPT_FILE"
     echo "Transcript available at: $TRANSCRIPT_FILE"
     exit 0
 elif [[ "$EXT" != "wav" ]]; then
@@ -71,7 +71,8 @@ whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" | tee "$TRANSCRIPT_FILE"
 
 # Clean the transcript
 echo "Cleaning transcript..."
-python "$CLEANER_SCRIPT" "$TRANSCRIPT_FILE"
+filename="$TRANSCRIPT_FILE" python "$CLEANER_SCRIPT" < "$TRANSCRIPT_FILE" > "${TRANSCRIPT_FILE}.clean"
+mv "${TRANSCRIPT_FILE}.clean" "$TRANSCRIPT_FILE"
 
 echo "Transcript available at: $TRANSCRIPT_FILE"
 

@@ -18,7 +18,7 @@ The functions remove_line_stuttering() and remove_word_stuttering() then further
 This merged, staged approach should address your needs for converting VTT input and handling Whisper’s candidate mismatches.
 
 [00:00:46.360 --> 00:01:03.940]   must become 
-00:00:46.360
+00:00:46
 
 TS1 BA
 TS2 BANA
@@ -55,6 +55,8 @@ def process_vtt(content):
     """
     # Remove the WEBVTT header and any metadata
     content = re.sub(r'^WEBVTT\n.*?\n\n', '', content, flags=re.DOTALL)
+    # Convert timestamp ranges to simple timestamps
+    content = re.sub(r'\[(\d{2}:\d{2}:\d{2})\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\]\s*', r'\1 ', content)
     # Split into caption blocks
     captions = re.split(r'\n\n+', content)
     processed_captions = []
@@ -65,7 +67,7 @@ def process_vtt(content):
         # Extract candidates matching a timestamp and text.
         # Expecting format: "HH:MM:SS(.mmm)? <text>"
         for line in lines:
-            m = re.match(r'^(\d{2}:\d{2}:\d{2}\.\d{3})\s+(.*)$', line)
+            m = re.match(r'^(\d{2}:\d{2}:\d{2})\s+(.*)$', line)
             if m:
                 ts = m.group(1)
                 txt = clean_text(m.group(2))
@@ -96,6 +98,8 @@ def process_vtt(content):
             merged_candidates.append((ts, final_text))
         # Add each merged candidate as a separate processed caption.
         for ts, text in merged_candidates:
+            # Remove milliseconds if present
+            ts = ts.split('.')[0] if '.' in ts else ts
             processed_captions.append(f"{ts} {text}")
     return "\n".join(processed_captions)
 

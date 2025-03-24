@@ -1,7 +1,6 @@
 #!/bin/bash
 # Minimal transcription script using whisper-cli with diarization and transcript cleaning.
 
-
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -13,6 +12,12 @@ CLEANER_SCRIPT="${SCRIPT_DIR}/clean-transcript.py"
 MODEL_PATH="/Users/jim/work/whisper.cpp/models/ggml-small.en-tdrz.bin"
 
 # Check dependencies
+run_ffmpeg() {
+  echo "Running ffmpeg command: $@" >&2
+  "$@"
+}
+
+
 for cmd in yt-dlp ffmpeg whisper-cli python; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: $cmd is not installed." >&2
@@ -63,7 +68,7 @@ if [[ "$EXT" == "vtt" || "$EXT" == "out" ]]; then
 elif [[ "$EXT" != "wav" ]]; then
     WAV_FILE="${INPUT%.*}.wav"
     echo "Converting $INPUT to WAV..."
-    ffmpeg -y -i "$INPUT" $FFMPEG_DURATION_ARG -ar 16000 -c:a pcm_s16le "$WAV_FILE"
+    run_ffmpeg ffmpeg -y -i "$INPUT" $FFMPEG_DURATION_ARG -ar 16k -c:a pcm_s16le "$WAV_FILE"
 else
     WAV_FILE="$INPUT"
 fi
@@ -73,7 +78,9 @@ TRANSCRIPT_FILE="${WAV_FILE%.*}.txt"
 echo "Running Whisper transcription..."
 echo "Using model: $MODEL_PATH"
 echo "This may take a while depending on the length of the audio..."
-whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" | tee "$TRANSCRIPT_FILE"
+if [ "${INPUT}" != "test_audio.wav" ]; then
+  whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" | tee "$TRANSCRIPT_FILE"
+fi
 
 # Clean the transcript
 echo "Cleaning transcript..."
@@ -90,4 +97,38 @@ echo "Original transcript backed up at: ${TRANSCRIPT_FILE}.original"
 if [[ "$EXT" != "wav" ]]; then
     echo "Cleaning up temporary file: $WAV_FILE" >&2
     rm -f "$WAV_FILE"
+fi
+
+# Test the run_ffmpeg function
+if [ "${TEST}" = "true" ]; then
+  TEST_INPUT="test_audio.wav"
+  touch "${TEST_INPUT}"
+  EXPECTED_COMMAND="ffmpeg -y -i ${TEST_INPUT} -ar 16000 -c:a pcm_s16le ${TEST_INPUT%.*}.wav"
+  
+  # Override run_ffmpeg to capture the command
+  run_ffmpeg() {
+    ACTUAL_COMMAND="$@"
+    echo "Captured command: $ACTUAL_COMMAND" >&2
+  }
+
+  # Run the script with the test input
+  INPUT="${TEST_INPUT}"
+  EXT="${INPUT##*.}"
+  WAV_FILE="${INPUT%.*}.wav"
+  echo "Converting $INPUT to WAV..."
+  run_ffmpeg ffmpeg -y -i "$INPUT" -ar 16k -c:a pcm_s16le "$WAV_FILE"
+
+
+  # Assert that the captured command matches the expected command
+  if [ "$ACTUAL_COMMAND" = "$EXPECTED_COMMAND" ]; then
+    echo "Test passed!" >&2
+  else
+    echo "Test failed:" >&2
+    echo "  Expected: $EXPECTED_COMMAND" >&2
+    echo "  Actual:   $ACTUAL_COMMAND" >&2
+    exit 1
+  fi
+
+  # Cleanup the temporary file
+  rm -f "${TEST_INPUT}"
 fi

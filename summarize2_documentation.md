@@ -52,6 +52,18 @@ For URL inputs, the script downloads the audio and processes it accordingly.
 - The script assumes that dependencies are correctly installed and available in the system PATH.
 - Further processing (e.g., converting to OGG Opus and cleanup) may be appended in future updates.
 
+**`run_ffmpeg` Function**
+
+The `run_ffmpeg` function is a wrapper around the `ffmpeg` command-line tool. It takes the ffmpeg command as an argument, displays the command to standard error, and then executes it. This function is used to convert audio files to WAV format.
+
+Usage:
+````bash
+run_ffmpeg ffmpeg -y -i input.mp3 -ar 16k -c:a pcm_s16le output.wav
+````
+
+This will print the ffmpeg command to standard error and then execute it, converting `input.mp3` to `output.wav`.
+
+
 **ollm_bridge.py Documentation**
 The `ollm_bridge.py` script is a Python tool that creates symbolic links between Ollama models and LMStudio. It allows users to manage their models in both Ollama and LMStudio by creating symbolic links between the model directories.
 

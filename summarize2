@@ -47,7 +47,8 @@ fi
 # If input is a URL, download audio
 if [[ "$INPUT" =~ ^https?:// ]]; then
     echo "Downloading audio from URL..."
-    yt-dlp -f bestaudio --output "downloaded.%(ext)s" "$INPUT"
+    yt-dlp -x  --cookies-from-browser brave  --write-auto-sub --downloader aria2c -f bestaudio --output "downloaded.%(ext)s" "$INPUT" ||
+    yt-dlp -x  --cookies-from-browser brave --downloader aria2c   --output "downloaded.%(ext)s" "$INPUT" # Fallback to yt-dlp without auto-sub if the first fails
     INPUT=$(ls downloaded.* | head -n 1)
     if [[ -z "$INPUT" ]]; then
         echo "Error: Audio download failed." >&2

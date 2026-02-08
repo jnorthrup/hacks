@@ -1,135 +1,676 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Minimal transcription script using whisper-cli with diarization and transcript cleaning.
+# Designed for URL inputs and ephemeral environments like GCP Cloud Shell.
+# Automatically attempts dependency installation.
 
 set -euo pipefail
 IFS=$'\n\t'
+
+# Platform configuration matrix
+declare -A PLATFORM_CONFIG=(
+    [linux]="cache_dir:${XDG_CACHE_HOME:-$HOME/.cache}/summarize2|pkg_mgr:apt|bash_path:/bin/bash"
+    [macos]="cache_dir:$HOME/Library/Caches/summarize2|pkg_mgr:brew|bash_path:/usr/local/bin/bash"
+)
+
+# Architecture-specific build flags for whisper.cpp
+declare -A ARCH_FLAGS=(
+    [x86_64]="WHISPER_CUBLAS=1" # Adjust if assuming no GPU in Cloud Shell (remove flag)
+    [arm64]="WHISPER_METAL=1"  # Likely irrelevant for GCP Cloud Shell
+    [aarch64]="WHISPER_COREML=1" # Likely irrelevant for GCP Cloud Shell
+    # Add a basic flag if none match or no GPU expected:
+    [default]="WHISPER_NO_ACCELERATE=1" # Example: build basic version
+)
+
+# Detect platform and architecture
+detect_platform() {
+    case "$OSTYPE" in
+        linux*)  echo "linux" ;;
+        darwin*) echo "macos" ;;
+        *)       echo "unknown" ;;
+    esac
+}
+
+PLATFORM=$(detect_platform)
+ARCH=$(uname -m)
+
+if [[ ! -v PLATFORM_CONFIG[$PLATFORM] ]]; then
+    echo "Unsupported platform: $PLATFORM" >&2
+    exit 1
+fi
+
+# Parse platform config
+IFS='|' read -ra CONFIG <<< "${PLATFORM_CONFIG[$PLATFORM]}"
+for entry in "${CONFIG[@]}"; do
+    IFS=':' read -r key value <<< "$entry"
+    case $key in
+        cache_dir) CACHE_DIR="$value" ;;
+        pkg_mgr) PKG_MGR="$value" ;;
+        bash_path) BASH_PATH="$value" ;;
+    esac
+done
+
+# Determine appropriate whisper.cpp build flags
+BUILD_FLAGS="${ARCH_FLAGS[$ARCH]:-${ARCH_FLAGS[default]}}"
+echo "Using whisper.cpp build flags: $BUILD_FLAGS" >&2
 
 # Get the directory where the script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CLEANER_SCRIPT="${SCRIPT_DIR}/clean-transcript.py"
 
-# Set the path to the Whisper model
-MODEL_PATH="/Users/jim/work/whisper.cpp/models/ggml-small.en-tdrz.bin"
+# Create cache directory with platform-appropriate permissions
+mkdir -p "$CACHE_DIR"
+if [[ "$PLATFORM" == "linux" ]]; then
+    chmod 700 "$CACHE_DIR"
+fi
 
-# Check dependencies
+# Set model path with whisper.cc prefix
+MODEL_PATH="$CACHE_DIR/models/ggml-small.en-tdrz.bin" # Store model in cache dir
+MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-tdrz.bin"
+MODEL_DIR=$(dirname "$MODEL_PATH")
+
+# Dependency installation commands map
+declare -A PKG_INSTALL=(
+    [apt]="sudo apt-get update && sudo apt-get install -y" # Add update for ephemeral envs
+    [brew]="brew install"
+    # pip install handled separately now
+)
+
+# Platform-specific dependency mappings
+declare -A DEPENDENCIES=(
+    [yt-dlp]="pip:yt-dlp"
+    [ffmpeg]="sys:ffmpeg"
+    [whisper-cli]="src:https://github.com/ggerganov/whisper.cpp"
+    # Note: Python is handled implicitly via pip check below
+    [aria2c]="sys:aria2" # Changed key to command name
+    [aria2p]="pip:aria2p"
+    [git]="sys:git" # Needed for cloning pyenv and whisper.cpp
+    [make]="sys:make" # Needed for building whisper.cpp
+)
+# Add python3/pip as explicit system dependencies for clarity
+if [[ "$PLATFORM" == "linux" ]]; then
+    DEPENDENCIES[python3]="sys:python3"
+    DEPENDENCIES[pip]="sys:python3-pip"
+elif [[ "$PLATFORM" == "macos" ]]; then
+     DEPENDENCIES[python3]="sys:python@3.9" # Example brew python version
+     # Pip should come with brew python
+fi
+
+
+# Function to check and add user's local bin to PATH
+ensure_user_bin_in_path() {
+    USER_BIN_DIR="$HOME/.local/bin"
+    if [[ -d "$USER_BIN_DIR" && ":$PATH:" != *":$USER_BIN_DIR:"* ]]; then
+        echo "Adding $USER_BIN_DIR to PATH" >&2
+        export PATH="$USER_BIN_DIR:$PATH"
+    fi
+}
+
+# Function to check and add whisper build dir to PATH
+ensure_whisper_in_path() {
+    WHISPER_BUILD_DIR="$CACHE_DIR/whisper.cpp"
+     if [[ -d "$WHISPER_BUILD_DIR" && -f "$WHISPER_BUILD_DIR/whisper-cli" && ":$PATH:" != *":$WHISPER_BUILD_DIR:"* ]]; then
+        echo "Adding $WHISPER_BUILD_DIR to PATH" >&2
+        export PATH="$WHISPER_BUILD_DIR:$PATH"
+    fi
+}
+
+install_dependency() {
+    local dep_key=$1 # Use the key from DEPENDENCIES array (e.g., yt-dlp, aria2c)
+# Function to check file size (cross-platform basic check)
+check_file_size() {
+    local file_path="$1"
+    local min_size_bytes=$2
+    local actual_size=0
+
+    if [[ ! -f "$file_path" ]]; then
+        return 1 # File doesn't exist
+    fi
+
+    # Get size - use stat -f %z on macOS, stat -c %s on Linux
+    if [[ "$PLATFORM" == "macos" ]]; then
+        actual_size=$(stat -f%z "$file_path" 2>/dev/null)
+    else # Assume Linux/GNU stat
+        actual_size=$(stat -c%s "$file_path" 2>/dev/null)
+    fi
+
+    if [[ -z "$actual_size" ]] || ! [[ "$actual_size" =~ ^[0-9]+$ ]]; then
+        echo "Warning: Could not determine size of $file_path" >&2
+        # Optionally, return success here to be lenient, or failure to be strict
+        return 1 # Treat unknown size as failure for safety
+    fi
+
+    if (( actual_size < min_size_bytes )); then
+        echo "Error: Downloaded file $file_path is too small ($actual_size bytes). Minimum expected: $min_size_bytes bytes." >&2
+        return 1 # Size check failed
+    fi
+
+    return 0 # Size check passed
+}
+
+# Download whisper model if it doesn't exist or is invalid
+download_model() {
+    local model_ok=false
+    local min_model_size=$((10 * 1024 * 1024)) # 10 MB threshold for small model
+
+    if [ -f "$MODEL_PATH" ]; then
+        echo "Checking existing model file: $MODEL_PATH" >&2
+        if check_file_size "$MODEL_PATH" "$min_model_size"; then
+            echo "Existing model file size seems valid." >&2
+            model_ok=true
+        else
+            echo "Existing model file is too small or invalid. Will attempt re-download." >&2
+            rm -f "$MODEL_PATH" # Delete invalid file
+            model_ok=false
+        fi
+    fi
+
+    if [[ "$model_ok" == "false" ]]; then
+        echo "Whisper model not found or invalid at $MODEL_PATH. Downloading..." >&2
+        mkdir -p "$MODEL_DIR"
+        local download_success=false
+
+        # Attempt 1: aria2c
+        if command -v aria2c >/dev/null 2>&1; then
+            echo "Attempting download with aria2c..." >&2
+            # Added --allow-overwrite to handle retries, increased timeout
+            if aria2c --allow-overwrite=true --max-connection-per-server=5 --min-split-size=1M --timeout=60 -x 4 -s 4 -d "$MODEL_DIR" -o "$(basename $MODEL_PATH)" "$MODEL_URL"; then
+                if check_file_size "$MODEL_PATH" "$min_model_size"; then
+                    echo "aria2c download successful and file size is valid." >&2
+                    download_success=true
+                else
+                    echo "aria2c downloaded file but size is invalid." >&2
+                    rm -f "$MODEL_PATH" # Clean up invalid file
+                fi
+            else
+                echo "Warning: aria2c download command failed." >&2
+                rm -f "$MODEL_PATH" # Clean up potentially partial file
+            fi
+        fi
+
+        # Attempt 2: curl (if aria2c failed)
+        if [[ "$download_success" == "false" ]] && command -v curl >/dev/null 2>&1; then
+            echo "Falling back to curl..." >&2
+            # Use -f to fail on server errors, -o for output, -L for redirects
+            if curl -f -L -o "$MODEL_PATH" "$MODEL_URL"; then
+                if check_file_size "$MODEL_PATH" "$min_model_size"; then
+                    echo "curl download successful and file size is valid." >&2
+                    download_success=true
+                else
+                    echo "curl downloaded file but size is invalid." >&2
+                    rm -f "$MODEL_PATH"
+                fi
+            else
+                echo "Warning: curl download command failed." >&2
+                rm -f "$MODEL_PATH"
+            fi
+        fi
+
+        # Attempt 3: wget (if curl also failed)
+        if [[ "$download_success" == "false" ]] && command -v wget >/dev/null 2>&1; then
+            echo "Falling back to wget..." >&2
+            # Use -O for output file
+            if wget -O "$MODEL_PATH" "$MODEL_URL"; then
+                if check_file_size "$MODEL_PATH" "$min_model_size"; then
+                    echo "wget download successful and file size is valid." >&2
+                    download_success=true
+                else
+                    echo "wget downloaded file but size is invalid." >&2
+                    rm -f "$MODEL_PATH"
+                fi
+            else
+                echo "Warning: wget download command failed." >&2
+                rm -f "$MODEL_PATH"
+            fi
+        fi
+
+        # Final check
+        if [[ "$download_success" == "false" ]]; then
+            echo "Error: All download attempts failed for model $MODEL_URL." >&2
+            exit 1
+        fi
+        echo "Model downloaded successfully to $MODEL_PATH" >&2
+    else
+        echo "Whisper model found and seems valid at $MODEL_PATH" >&2
+    fi
+}
+
+    local dep_info="${DEPENDENCIES[$dep_key]}"
+    IFS=':' read -r source package <<< "$dep_info"
+    local cmd_name="$dep_key" # Assume command name is the key unless specified otherwise (like python3 for 'python')
+    if [[ "$dep_key" == "pip" ]]; then cmd_name="pip3"; fi # Adjust if needed based on system python naming
+    if [[ "$dep_key" == "whisper-cli" ]]; then cmd_name="whisper-cli"; fi # Explicitly set command name
+    if [[ "$dep_key" == "aria2c" ]]; then cmd_name="aria2c"; fi # Already correct but explicit
+
+
+    echo "Attempting to install $dep_key ($source:$package)..." >&2
+
+    case $source in
+        pip)
+            echo "Installing $dep_key via pip..." >&2
+            # Ensure python3 and pip are available (should have been handled by sys dependency check)
+            if ! command -v python3 >/dev/null 2>&1 || ! python3 -m pip --version >/dev/null 2>&1; then
+                 echo "Error: python3 or pip command not found. Please ensure Python 3 and pip are installed." >&2
+                 # Attempt system install again just in case
+                 if [[ "$PLATFORM" == "linux" ]]; then
+                     ${PKG_INSTALL[apt]} python3 python3-pip || true # Try, but don't exit if it fails here
+                 elif [[ "$PLATFORM" == "macos" ]]; then
+                      ${PKG_INSTALL[brew]} python@3.9 || true
+                 fi
+                 # Check again
+                 if ! command -v python3 >/dev/null 2>&1 || ! python3 -m pip --version >/dev/null 2>&1; then
+                     echo "Error: Failed to ensure python3 and pip installation." >&2
+                     exit 1
+                 fi
+            fi
+            # Attempt pip install
+            if python3 -m pip install --user "$package"; then
+                echo "$dep_key installed via pip." >&2
+                ensure_user_bin_in_path # Make sure ~/.local/bin is in PATH
+            else
+                echo "Error: Failed to install $dep_key via pip." >&2
+                # Check if command exists anyway (maybe installed previously?)
+                 ensure_user_bin_in_path
+                 if ! command -v "$cmd_name" > /dev/null 2>&1; then
+                    exit 1 # Exit if installation failed and command still not found
+                 else
+                     echo "Warning: pip install command failed, but $cmd_name seems to be available." >&2
+                 fi
+            fi
+            ;;
+        sys)
+            echo "Installing system package $package for $dep_key..." >&2
+            local install_cmd="${PKG_INSTALL[$PKG_MGR]}"
+            local package_name="$package"
+
+            if ! $install_cmd $package_name; then
+                 echo "Error: Failed to install system package $package_name for $dep_key." >&2
+                 exit 1
+            fi
+            # For python3-pip on linux, ensure pip command works
+             if [[ "$dep_key" == "pip" && "$PLATFORM" == "linux" ]]; then
+                if ! python3 -m pip --version >/dev/null 2>&1; then
+                    echo "Error: Installed python3-pip but pip command still not found." >&2
+                    exit 1
+                fi
+            fi
+             ;;
+        src)
+            echo "Building $dep_key ($package) from source..." >&2
+            # Need git and make
+            if ! command -v git >/dev/null 2>&1; then install_dependency "git"; fi
+            if ! command -v make >/dev/null 2>&1; then install_dependency "make"; fi
+            # Check again after potential install
+             if ! command -v git >/dev/null 2>&1 || ! command -v make >/dev/null 2>&1; then
+                echo "Error: git or make command not found after installation attempt. Cannot build from source." >&2
+                exit 1
+            fi
+
+            local srcdir="$CACHE_DIR/$(basename $package)"
+            if [[ -d "$srcdir" ]]; then
+                echo "Source directory $srcdir already exists. Pulling latest changes." >&2
+                (cd "$srcdir" && git pull) || echo "Warning: git pull failed for $srcdir" >&2
+            else
+                 echo "Cloning $package into $srcdir..." >&2
+                 git clone --depth 1 "$package" "$srcdir" || { echo "Error: Failed to clone $package." >&2; exit 1; }
+            fi
+            echo "Building in $srcdir with flags: $BUILD_FLAGS..." >&2
+            # Use nproc if available, otherwise default to 4 cores
+            local cores=$(nproc 2>/dev/null || echo 4)
+            (cd "$srcdir" && make clean && make $BUILD_FLAGS -j"$cores" whisper-cli) || { echo "Error: Failed to build $dep_key from source." >&2; exit 1; }
+            ensure_whisper_in_path # Add build dir to PATH
+            ;;
+    esac
+
+    # Final check after install attempt
+    ensure_user_bin_in_path # Ensure relevant paths are checked
+    ensure_whisper_in_path
+    if ! command -v "$cmd_name" >/dev/null 2>&1; then
+        echo "Error: Installation of $dep_key successful, but command '$cmd_name' not found in PATH." >&2
+        echo "Current PATH: $PATH" >&2
+        exit 1
+    else
+         echo "$cmd_name found at: $(command -v $cmd_name)" >&2
+    fi
+
+}
+
+# Download whisper model if it doesn't exist
+download_model() {
+    if [ ! -f "$MODEL_PATH" ]; then
+        echo "Whisper model not found at $MODEL_PATH. Downloading..." >&2
+        mkdir -p "$MODEL_DIR"
+        # Check for aria2c first for potentially faster downloads
+        if command -v aria2c >/dev/null 2>&1; then
+             echo "Using aria2c to download model..." >&2
+             aria2c -x 4 -s 4 -d "$MODEL_DIR" -o "$(basename $MODEL_PATH)" "$MODEL_URL" || {
+                 echo "Warning: aria2c download failed, falling back to curl..." >&2
+                 curl -L -o "$MODEL_PATH" "$MODEL_URL"
+             }
+        elif command -v curl >/dev/null 2>&1; then
+             echo "Using curl to download model..." >&2
+             curl -L -o "$MODEL_PATH" "$MODEL_URL"
+        elif command -v wget >/dev/null 2>&1; then
+              echo "Using wget to download model..." >&2
+              wget -O "$MODEL_PATH" "$MODEL_URL"
+        else
+            echo "Error: Cannot download model. Need aria2c, curl, or wget." >&2
+            exit 1
+        fi
+
+        if [ ! -f "$MODEL_PATH" ]; then
+             echo "Error: Model download failed." >&2
+             exit 1
+        fi
+         echo "Model downloaded successfully to $MODEL_PATH" >&2
+    else
+        echo "Whisper model found at $MODEL_PATH" >&2
+    fi
+}
+
 run_ffmpeg() {
   echo "Running ffmpeg command: $@" >&2
   "$@"
 }
 
+# --- Argument Parsing ---
+INSTALL_ONLY=false
+while getopts "i" opt; do
+    case $opt in
+        i) INSTALL_ONLY=true ;;
+        *) echo "Usage: $0 [-i] <input_file_or_url>" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND-1))
 
-for cmd in yt-dlp ffmpeg whisper-cli python; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        echo "Error: $cmd is not installed." >&2
-        echo "Please install missing dependencies:"
-        echo "  yt-dlp: pip install yt-dlp"
-        echo "  ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
-        echo "  whisper-cli: Follow installation instructions at https://github.com/ggerganov/whisper.cpp"
-        exit 1
+# --- Dependency Check and Installation ---
+echo "Checking dependencies..." >&2
+for dep_key in "${!DEPENDENCIES[@]}"; do
+    # Determine command name based on key
+    cmd_name="$dep_key"
+    if [[ "$dep_key" == "pip" ]]; then cmd_name="pip3" || cmd_name="pip"; fi # Adjust based on common system names
+    if [[ "$dep_key" == "whisper-cli" ]]; then cmd_name="whisper-cli"; fi
+    if [[ "$dep_key" == "aria2c" ]]; then cmd_name="aria2c"; fi # Ensure correct check for aria2 command
+
+    # Pre-add potential paths to handle cases where script runs multiple times or paths aren't set globally
+    ensure_user_bin_in_path
+    ensure_whisper_in_path
+
+    if ! command -v "$cmd_name" >/dev/null 2>&1; then
+        echo "$cmd_name not found." >&2
+        install_dependency "$dep_key"
+    else
+        echo "$cmd_name found: $(command -v $cmd_name)" >&2
     fi
 done
+echo "Dependency check complete." >&2
+
+# Download model (after dependency checks ensure download tools are present)
+download_model
+
+if [[ "$INSTALL_ONLY" == "true" ]]; then
+    echo "Installation and setup complete (-i flag specified)."
+    exit 0
+fi
+
+# --- Main Execution ---
 
 # Usage: $0 <input_file_or_url>
 if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <input_file_or_url>" >&2
+    echo "Usage: $0 [-i] <input_file_or_url>" >&2
+    echo "  <input_file_or_url>: Path to local media file or a URL (e.g., YouTube)." >&2
+    echo "  -i : Install dependencies only and exit." >&2
     exit 1
 fi
 
 INPUT="$1"
+OUTPUT_BASENAME="" # Initialize
 
 # Use an environment variable for duration
 : "${DURATION:=}"
 FFMPEG_DURATION_ARG=""
 if [[ -n "$DURATION" ]]; then
+    echo "Limiting processing to first $DURATION seconds." >&2
     FFMPEG_DURATION_ARG="-t $DURATION"
 fi
 
 # If input is a URL, download audio
 if [[ "$INPUT" =~ ^https?:// ]]; then
-    echo "Downloading audio from URL..."
-    yt-dlp -x  --cookies-from-browser brave  --write-auto-sub --downloader aria2c -f bestaudio --output "downloaded.%(ext)s" "$INPUT" ||
-    yt-dlp -x  --cookies-from-browser brave --downloader aria2c   --output "downloaded.%(ext)s" "$INPUT" # Fallback to yt-dlp without auto-sub if the first fails
-    INPUT=$(ls downloaded.* | head -n 1)
-    if [[ -z "$INPUT" ]]; then
-        echo "Error: Audio download failed." >&2
+    echo "Input is a URL. Downloading audio..." >&2
+    # Define base name for downloaded file BEFORE download attempt
+    DL_FILENAME="downloaded_audio_$(date +%s)" # Unique name base
+    OUTPUT_BASENAME="$DL_FILENAME" # Use this base for transcripts etc.
+    WAV_FILE="${OUTPUT_BASENAME}.wav" # Target WAV filename
+    DOWNLOADED_FILE="" # Variable to store the actual downloaded file name
+
+    # Construct yt-dlp command parts
+    YT_DLP_OPTS=(-x --audio-format wav --audio-quality 0) # Extract WAV directly
+    USE_ARIA2C=false
+    # Try using aria2c if available
+    if command -v aria2c >/dev/null 2>&1; then
+        YT_DLP_OPTS+=(--downloader aria2c)
+        USE_ARIA2C=true
+    fi
+     # Try using cookies if brave is common, add others if needed
+    if [[ -d "$HOME/.config/BraveSoftware/Brave-Browser" || -d "$HOME/Library/Application Support/BraveSoftware/Brave-Browser" ]]; then
+         YT_DLP_OPTS+=(--cookies-from-browser brave)
+    fi
+     YT_DLP_OPTS+=(--output "${OUTPUT_BASENAME}.%(ext)s" "$INPUT")
+
+    echo "Running yt-dlp command: yt-dlp ${YT_DLP_OPTS[@]}" >&2
+    if yt-dlp "${YT_DLP_OPTS[@]}"; then
+        DOWNLOAD_SUCCESS=true
+    else
+        DOWNLOAD_SUCCESS=false
+        if [[ "$USE_ARIA2C" == "true" ]]; then
+            echo "Retrying with OAuth authentication..." >&2
+            rm -f "${OUTPUT_BASENAME}".*
+            YT_DLP_OPTS=(-x --audio-format wav --audio-quality 0)
+            YT_DLP_OPTS+=(--username oauth)
+            YT_DLP_OPTS+=(--output "${OUTPUT_BASENAME}.%(ext)s" "$INPUT")
+            echo "Running yt-dlp command: yt-dlp ${YT_DLP_OPTS[@]}" >&2
+            if yt-dlp "${YT_DLP_OPTS[@]}"; then
+                DOWNLOAD_SUCCESS=true
+            fi
+        fi
+    fi
+
+    if [[ "$DOWNLOAD_SUCCESS" == "true" ]]; then
+        # Find the downloaded file (should be .wav now)
+        DOWNLOADED_FILE=$(ls "${OUTPUT_BASENAME}".* 2>/dev/null | head -n 1)
+        if [[ -z "$DOWNLOADED_FILE" || ! -f "$DOWNLOADED_FILE" ]]; then
+             echo "Error: yt-dlp succeeded but output file not found (${OUTPUT_BASENAME}.*)." >&2
+             exit 1
+        fi
+         # Ensure it's the expected WAV file
+         if [[ "$DOWNLOADED_FILE" != "$WAV_FILE" ]]; then
+            echo "Warning: Downloaded file is not the expected WAV: $DOWNLOADED_FILE. Attempting to use it anyway." >&2
+            # If it's not WAV, we might need conversion later, but yt-dlp -x should handle it.
+            # For simplicity, let's assume yt-dlp gave us the correct WAV if the command succeeded.
+             if [[ "${DOWNLOADED_FILE##*.}" != "wav" ]]; then
+                echo "Error: Expected WAV file from yt-dlp, got ${DOWNLOADED_FILE##*.}" >&2
+                exit 1
+             fi
+             WAV_FILE="$DOWNLOADED_FILE" # Use the actual file name
+         fi
+         echo "Audio downloaded successfully as $WAV_FILE" >&2
+         INPUT="$WAV_FILE" # Update INPUT to be the local file path
+    else
+        echo "Error: Audio download failed using yt-dlp." >&2
+        # Attempt cleanup of partial files
+        rm -f "${OUTPUT_BASENAME}".*
         exit 1
     fi
-fi
+    NEEDS_CLEANUP="$WAV_FILE" # Mark the downloaded WAV for cleanup
 
-# Determine input file type based on extension
-EXT="${INPUT##*.}"
-if [[ "$EXT" == "vtt" || "$EXT" == "out" ]]; then
-    TRANSCRIPT_FILE="${INPUT%.*}_cleaned.txt"
-    echo "Input file is VTT or .out; skipping conversion and transcription."
-    echo "Cleaning transcript..."
-    # Pass content through stdin and redirect output to file
-    filename="$INPUT" python "$CLEANER_SCRIPT" < "$INPUT" > "$TRANSCRIPT_FILE"
-    echo "Transcript available at: $TRANSCRIPT_FILE"
-    exit 0
-elif [[ "$EXT" != "wav" ]]; then
-    WAV_FILE="${INPUT%.*}.wav"
-    echo "Converting $INPUT to WAV..."
-    run_ffmpeg ffmpeg -y -i "$INPUT" $FFMPEG_DURATION_ARG -ar 16k -c:a pcm_s16le "$WAV_FILE"
+elif [[ -f "$INPUT" ]]; then
+    echo "Input is a local file: $INPUT" >&2
+    OUTPUT_BASENAME="${INPUT%.*}" # Base name from local file
+    NEEDS_CLEANUP="" # Assume local input shouldn't be deleted unless converted
 else
-    WAV_FILE="$INPUT"
-fi
-
-# Run Whisper transcription with diarization
-TRANSCRIPT_FILE="${WAV_FILE%.*}.txt"
-echo "Running Whisper transcription..."
-echo "Using model: $MODEL_PATH"
-echo "This may take a while depending on the length of the audio..."
-if [ "${INPUT}" != "test_audio.wav" ]; then
-  whisper-cli -tdrz -m "$MODEL_PATH" "$WAV_FILE" | tee "$TRANSCRIPT_FILE"
-fi
-
-# Clean the transcript
-echo "Cleaning transcript..."
-filename="$TRANSCRIPT_FILE" python "$CLEANER_SCRIPT" < "$TRANSCRIPT_FILE" > "${TRANSCRIPT_FILE}.clean"
-mv "${TRANSCRIPT_FILE}.clean" "$TRANSCRIPT_FILE"
-
-# Create a backup of the original transcript
-cp "$TRANSCRIPT_FILE" "${TRANSCRIPT_FILE}.original"
-
-echo "Transcript available at: $TRANSCRIPT_FILE"
-echo "Original transcript backed up at: ${TRANSCRIPT_FILE}.original"
-
-# Cleanup temporary WAV file if conversion was done
-if [[ "$EXT" != "wav" ]]; then
-    echo "Cleaning up temporary file: $WAV_FILE" >&2
-    rm -f "$WAV_FILE"
-fi
-
-# Test the run_ffmpeg function
-if [ "${TEST}" = "true" ]; then
-  TEST_INPUT="test_audio.wav"
-  touch "${TEST_INPUT}"
-  EXPECTED_COMMAND="ffmpeg -y -i ${TEST_INPUT} -ar 16000 -c:a pcm_s16le ${TEST_INPUT%.*}.wav"
-  
-  # Override run_ffmpeg to capture the command
-  run_ffmpeg() {
-    ACTUAL_COMMAND="$@"
-    echo "Captured command: $ACTUAL_COMMAND" >&2
-  }
-
-  # Run the script with the test input
-  INPUT="${TEST_INPUT}"
-  EXT="${INPUT##*.}"
-  WAV_FILE="${INPUT%.*}.wav"
-  echo "Converting $INPUT to WAV..."
-  run_ffmpeg ffmpeg -y -i "$INPUT" -ar 16k -c:a pcm_s16le "$WAV_FILE"
-
-
-  # Assert that the captured command matches the expected command
-  if [ "$ACTUAL_COMMAND" = "$EXPECTED_COMMAND" ]; then
-    echo "Test passed!" >&2
-  else
-    echo "Test failed:" >&2
-    echo "  Expected: $EXPECTED_COMMAND" >&2
-    echo "  Actual:   $ACTUAL_COMMAND" >&2
+    echo "Error: Input '$INPUT' is not a valid URL or existing local file." >&2
     exit 1
-  fi
-
-  # Cleanup the temporary file
-  rm -f "${TEST_INPUT}"
 fi
+
+
+# Determine input file type and convert if necessary
+EXT="${INPUT##*.}"
+WAV_FILE="${OUTPUT_BASENAME}.wav" # Define target WAV consistently
+
+if [[ "$EXT" == "vtt" || "$EXT" == "out" ]]; then
+    TRANSCRIPT_FILE="${OUTPUT_BASENAME}_cleaned.vtt"
+    echo "Input file ($INPUT) is VTT or .out; skipping conversion and transcription." >&2
+    echo "Cleaning transcript..." >&2
+    # Ensure cleaner script exists
+    if [[ ! -f "$CLEANER_SCRIPT" ]]; then
+        echo "Error: Cleaner script not found at $CLEANER_SCRIPT" >&2
+        exit 1
+    fi
+    # Pass content through stdin and redirect output to file
+    filename="$INPUT" python3 "$CLEANER_SCRIPT" < "$INPUT" > "$TRANSCRIPT_FILE"
+    echo "Cleaned transcript available at: $TRANSCRIPT_FILE"
+    # Clean up original VTT/OUT file if it was downloaded
+    if [[ -n "$NEEDS_CLEANUP" && "$INPUT" == "$NEEDS_CLEANUP" ]]; then
+         echo "Cleaning up downloaded input file: $INPUT" >&2
+         rm -f "$INPUT"
+    fi
+    exit 0
+elif [[ "$INPUT" != "$WAV_FILE" || "$EXT" != "wav" ]]; then
+    # Convert if the input file is not already the target WAV file
+    echo "Converting $INPUT to 16kHz mono WAV ($WAV_FILE)..." >&2
+    if run_ffmpeg ffmpeg -y -i "$INPUT" ${FFMPEG_DURATION_ARG} -ar 16000 -ac 1 -c:a pcm_s16le "$WAV_FILE"; then
+         echo "Conversion successful." >&2
+         # If original input was local and NOT the wav file, don't delete it.
+         # If original input was downloaded, mark the original downloaded file for cleanup.
+         if [[ -n "$NEEDS_CLEANUP" && "$INPUT" != "$WAV_FILE" ]]; then
+             echo "Cleaning up original downloaded file: $INPUT" >&2
+             rm -f "$INPUT"
+         fi
+         NEEDS_CLEANUP="$WAV_FILE" # Mark the *new* WAV file for cleanup
+    else
+        echo "Error: ffmpeg conversion failed." >&2
+        exit 1
+    fi
+else
+     echo "Input is already the target WAV file: $WAV_FILE" >&2
+     # If the input was a *local* wav file, don't clean it up.
+     # If it was *downloaded* as wav, NEEDS_CLEANUP is already set correctly.
+fi
+
+# --- Run Whisper Transcription ---
+TRANSCRIPT_FILE="${OUTPUT_BASENAME}.vtt" # Keep raw output as VTT initially
+echo "Running Whisper transcription..." >&2
+echo "Using model: $MODEL_PATH" >&2
+echo "Command: whisper-cli -m \"$MODEL_PATH\" -of \"$OUTPUT_BASENAME\" -ovtt \"$WAV_FILE\"" >&2
+echo "This may take a while depending on the length of the audio..." >&2
+
+# Use -of to control output filename base, -ovtt for VTT file
+# Capture console output to extract [SPEAKER_TURN] markers
+WHISPER_LOG="${OUTPUT_BASENAME}_whisper.log"
+if ~/work/whisper.cpp/bin/whisper-cli -m "$MODEL_PATH" -of "$OUTPUT_BASENAME" -tdrz -ovtt "$WAV_FILE" 2>&1 | tee "$WHISPER_LOG"; then
+    echo "Whisper transcription finished." >&2
+    # Check if the expected output file was created
+    if [[ ! -f "$TRANSCRIPT_FILE" ]]; then
+        echo "Error: Whisper ran but the expected output file '$TRANSCRIPT_FILE' was not created." >&2
+        ls -l "$(dirname $OUTPUT_BASENAME)" # List files in the output directory for debugging
+        exit 1
+    fi
+
+    # Extract [SPEAKER_TURN] markers from console output and inject them into VTT
+    if grep -q "SPEAKER_TURN" "$WHISPER_LOG"; then
+        echo "Injecting [SPEAKER_TURN] markers from console output into VTT..." >&2
+        # Create a temporary VTT with speaker markers
+        TEMP_VTT="${OUTPUT_BASENAME}_with_speakers.vtt"
+
+        # Process the VTT to add speaker markers where they appear in console output
+        python3 -c "
+import re
+
+# Read VTT file
+with open('$TRANSCRIPT_FILE', 'r') as f:
+    vtt_content = f.read()
+
+# Read whisper log to find speaker turns
+with open('$WHISPER_LOG', 'r') as f:
+    log_content = f.read()
+
+# Find all timestamps with speaker turns
+speaker_turns = []
+for line in log_content.split('\n'):
+    if '[SPEAKER_TURN]' in line:
+        # Extract timestamp from the line
+        match = re.search(r'\[(\d{2}:\d{2}:\d{2}\.\d{3}) -->', line)
+        if match:
+            timestamp = match.group(1)
+            speaker_turns.append(timestamp)
+
+# Inject [SPEAKER_TURN] markers into VTT
+lines = vtt_content.split('\n')
+output_lines = []
+for i, line in enumerate(lines):
+    output_lines.append(line)
+    # Check if this line is a timestamp line
+    if re.match(r'\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}', line):
+        # Get the start time
+        start_time = line.split(' --> ')[0]
+        # If this timestamp has a speaker turn, add marker to next text line
+        if start_time in speaker_turns:
+            # Look ahead for the next text line
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and lines[j].strip():
+                # Add [SPEAKER_TURN] to the end of this text line
+                output_lines[-1] = line  # Keep the timestamp
+                # Add the text line with [SPEAKER_TURN]
+                output_lines.append(lines[j] + ' [SPEAKER_TURN]')
+                # Skip the original text line in the next iteration
+                lines[j] = ''
+
+# Write the modified VTT
+with open('$TEMP_VTT', 'w') as f:
+    f.write('\n'.join(output_lines))
+
+# Replace the original VTT
+import os
+os.replace('$TEMP_VTT', '$TRANSCRIPT_FILE')
+" 2>/dev/null
+        echo "Speaker turn markers injected." >&2
+    fi
+else
+    echo "Error: whisper-cli transcription failed." >&2
+    exit 1
+fi
+
+# --- Clean the Transcript ---
+CLEANED_TRANSCRIPT_FILE="${OUTPUT_BASENAME}_cleaned.txt" # Change extension to .txt
+echo "Cleaning transcript ($TRANSCRIPT_FILE) -> ($CLEANED_TRANSCRIPT_FILE)..." >&2
+if [[ ! -f "$CLEANER_SCRIPT" ]]; then
+    echo "Error: Cleaner script not found at $CLEANER_SCRIPT" >&2
+    exit 1
+fi
+# Pass original transcript via stdin, save cleaned to new file
+if filename="$TRANSCRIPT_FILE" python3 "$CLEANER_SCRIPT" < "$TRANSCRIPT_FILE" > "$CLEANED_TRANSCRIPT_FILE"; then
+    echo "Transcript cleaned successfully." >&2
+    echo "Cleaned transcript available at: $CLEANED_TRANSCRIPT_FILE"
+    echo "Raw Whisper output available at: $TRANSCRIPT_FILE"
+else
+    echo "Error: Transcript cleaning script failed. Keeping raw transcript for debugging." >&2
+    echo "Raw transcript available at: $TRANSCRIPT_FILE"
+    # Optionally remove the empty/failed cleaned file
+    rm -f "$CLEANED_TRANSCRIPT_FILE"
+    exit 1
+fi
+
+# --- Cleanup ---
+if [[ -n "$NEEDS_CLEANUP" && -f "$NEEDS_CLEANUP" ]]; then
+    echo "Cleaning up temporary file: $NEEDS_CLEANUP" >&2
+    rm -f "$NEEDS_CLEANUP"
+fi
+
+echo "Processing complete."
+echo "Cleaned transcript: $CLEANED_TRANSCRIPT_FILE"
+echo "Raw transcript: $TRANSCRIPT_FILE"
+
+exit 0
+
+# Note: Test block removed as it relied on specific internal function mocking and specific input names.

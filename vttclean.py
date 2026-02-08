@@ -29,7 +29,12 @@ def process_vtt(content):
 
     def flush_buffer():
         if buffer:
-            processed_captions.append(buffer[-1])  # Keep the last (most complete) line
+            parts_first = buffer[0].split(' ', 2)
+            parts_last = buffer[-1].split(' ', 2)
+            if len(parts_first) >= 2 and len(parts_last) >= 3:
+                first_label = parts_first[1]
+                last_text = parts_last[2]
+                processed_captions.append(f"{first_label} {last_text}")
             buffer.clear()
 
     for caption in captions:
